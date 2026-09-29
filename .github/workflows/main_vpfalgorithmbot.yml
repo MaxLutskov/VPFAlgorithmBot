@@ -84,6 +84,8 @@ jobs:
           if any(not settings.get(key) for key in required):
               raise SystemExit('Required App Service settings are missing; see docs/azure-deploy.md')
           PY
+      - name: Enable startup diagnostics
+        run: az webapp log config -g asp -n VPFAlgorithmBot --docker-container-logging filesystem --level error -o none
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
@@ -103,6 +105,19 @@ jobs:
           )
           log = result.stdout + '\n' + result.stderr
           print('Startup log command succeeded:', result.returncode == 0)
+          print('Startup log characters:', len(log))
+          try:
+              stream = subprocess.run(
+                  ['az', 'webapp', 'log', 'tail', '-g', 'asp', '-n', 'VPFAlgorithmBot'],
+                  capture_output=True, text=True, timeout=20,
+              )
+              stream_log = stream.stdout + '\n' + stream.stderr
+          except subprocess.TimeoutExpired as exc:
+              def decode(value):
+                  return value.decode(errors='replace') if isinstance(value, bytes) else (value or '')
+              stream_log = decode(exc.stdout) + '\n' + decode(exc.stderr)
+          print('Log stream characters:', len(stream_log))
+          log += '\n' + stream_log
           checks = {
               'SQL connection or migration failure': ('SqlException', 'SqlClient', 'Login failed', 'Cannot open server'),
               'Database network failure': ('network-related', 'TCP Provider', 'server was not found'),
