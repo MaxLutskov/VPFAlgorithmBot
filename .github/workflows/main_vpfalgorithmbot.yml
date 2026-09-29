@@ -23,11 +23,14 @@ jobs:
         working-directory: src/VPFAlgorithmBot/ClientApp
         run: |
           pnpm install --frozen-lockfile
+          pnpm test
           pnpm build
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - name: Restore and run domain tests
+        env:
+          HistoryImport__GzipBase64: ${{ secrets.HISTORY_IMPORT_GZIP_BASE64 }}
         run: |
           dotnet restore VPFAlgorithmBot.slnx
           dotnet run --project tests/VPFAlgorithmBot.Tests/VPFAlgorithmBot.Tests.csproj --no-restore
@@ -92,6 +95,25 @@ jobs:
           PY
       - name: Select web app startup DLL
         run: az webapp config set -g asp -n VPFAlgorithmBot --startup-file 'dotnet VPFAlgorithmBot.dll' -o none
+      - name: Configure private historical import
+        env:
+          HISTORY_IMPORT_GZIP_BASE64: ${{ secrets.HISTORY_IMPORT_GZIP_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          data = os.environ.get('HISTORY_IMPORT_GZIP_BASE64', '')
+          if data:
+              result = subprocess.run([
+                  'az', 'webapp', 'config', 'appsettings', 'set', '-g', 'asp', '-n', 'VPFAlgorithmBot',
+                  '--settings', 'HistoryImport__GzipBase64=' + data, '-o', 'none',
+              ], capture_output=True)
+              if result.returncode:
+                  raise SystemExit('Failed to configure historical import; Azure response omitted to protect data.')
+              print('Private historical import configured; contents are not logged.')
+          else:
+              print('No new historical import payload configured.')
+          PY
       - name: Enable startup diagnostics
         run: az webapp log config -g asp -n VPFAlgorithmBot --docker-container-logging filesystem --level error -o none
       - name: Deploy to Azure Web App

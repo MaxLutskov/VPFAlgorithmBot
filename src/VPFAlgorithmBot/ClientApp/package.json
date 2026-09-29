@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "tsc -b && vite build --configLoader runner", "preview": "vite preview" },
+  "scripts": { "dev": "vite", "build": "tsc -b && vite build --configLoader runner", "preview": "vite preview", "test": "node --test src/apiResponse.test.mjs" },
   "dependencies": { "react": "19.2.8", "react-dom": "19.2.8" },
   "devDependencies": {
     "@types/node": "^26.2.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0",

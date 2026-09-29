@@ -1,6 +1,4 @@
-using System.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using VPFAlgorithmBot.Data;
 
 namespace VPFAlgorithmBot.Domain;
@@ -10,7 +8,10 @@ public sealed record IngestResult(string Status, long? IncidentId = null, string
 
 public sealed class IncidentService(AlgorithmDbContext db)
 {
-    public async Task<IngestResult> IngestAsync(InboundEvent input, CancellationToken ct = default)
+    public Task<IngestResult> IngestAsync(InboundEvent input, CancellationToken ct = default) =>
+        DatabaseWork.RunAsync(db, () => IngestCoreAsync(input, ct), ct);
+
+    private async Task<IngestResult> IngestCoreAsync(InboundEvent input, CancellationToken ct)
     {
         var chat = await db.Chats.SingleOrDefaultAsync(x => x.TelegramChatId == input.ChatTelegramId && x.Enabled, ct);
         if (chat is null) return new("Ignored", Reason: "Невідомий чат");
@@ -37,8 +38,8 @@ public sealed class IncidentService(AlgorithmDbContext db)
         DateTimeOffset occurred;
         try
         {
-            rule = EventParser.MatchRule(await db.AlgorithmRules.AsNoTracking().Where(x => x.Enabled).ToListAsync(ct), input.Text);
             occurred = EventParser.ParseTime(input.TelegramDateUtc, input.Text);
+            rule = await AlgorithmCatalog.ResolveAsync(db, input.Text, ct);
         }
         catch (Exception ex) when (ex is FormatException or System.Text.RegularExpressions.RegexMatchTimeoutException or ArgumentException)
         {
@@ -49,8 +50,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
             return new("Review", Reason: ex.Message);
         }
 
-        await using IDbContextTransaction? transaction = db.Database.IsInMemory()
-            ? null : await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         db.IncomingMessages.Add(message);
         await db.SaveChangesAsync(ct);
         if (kind == "problem")
@@ -60,7 +59,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
                 message.Status = "review";
                 message.ParseError = "Повторне червоне повідомлення для відкритого алгоритму";
                 await db.SaveChangesAsync(ct);
-                if (transaction is not null) await transaction.CommitAsync(ct);
                 return new("Review", Reason: message.ParseError);
             }
             var incident = new Incident
@@ -74,7 +72,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
             message.IncidentId = incident.Id;
             await QueueNotificationsAsync(incident, "problem", ct);
             await db.SaveChangesAsync(ct);
-            if (transaction is not null) await transaction.CommitAsync(ct);
             return new("Created", incident.Id);
         }
         var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
@@ -83,7 +80,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
             message.Status = "review";
             message.ParseError = candidates.Count == 0 ? "Немає відповідного початку" : candidates.Count > 1 ? "Кілька відкритих випадків" : "Завершення раніше початку";
             await db.SaveChangesAsync(ct);
-            if (transaction is not null) await transaction.CommitAsync(ct);
             return new("Review", Reason: message.ParseError);
         }
         var current = candidates[0];
@@ -93,7 +89,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
         message.IncidentId = current.Id;
         await QueueNotificationsAsync(current, "recovery", ct);
         await db.SaveChangesAsync(ct);
-        if (transaction is not null) await transaction.CommitAsync(ct);
         return new("Resolved", current.Id);
     }
 
@@ -123,11 +118,12 @@ public sealed class IncidentService(AlgorithmDbContext db)
         }
     }
 
-    public async Task<IncidentResponse> RespondAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct = default)
+    public Task<IncidentResponse> RespondAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct = default) =>
+        DatabaseWork.RunAsync(db, () => RespondCoreAsync(incidentId, telegramUserId, text, templateId, actionKey, ct), ct);
+
+    private async Task<IncidentResponse> RespondCoreAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text) && templateId is null) throw new ArgumentException("Порожня відповідь");
-        await using IDbContextTransaction? transaction = db.Database.IsInMemory()
-            ? null : await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var old = await db.Responses.SingleOrDefaultAsync(x => x.ActionKey == actionKey, ct);
         if (old is not null) return old;
         var user = await db.Users.Include(x => x.Scopes).SingleOrDefaultAsync(x => x.TelegramId == telegramUserId && x.Status == "approved", ct)
@@ -154,7 +150,6 @@ public sealed class IncidentService(AlgorithmDbContext db)
         db.Responses.Add(response);
         db.AuditEvents.Add(new AuditEvent { ActorUserId = user.Id, Action = "respond", Entity = "incident", EntityId = incidentId, CreatedAtUtc = response.CreatedAtUtc });
         await db.SaveChangesAsync(ct);
-        if (transaction is not null) await transaction.CommitAsync(ct);
         return response;
     }
 }

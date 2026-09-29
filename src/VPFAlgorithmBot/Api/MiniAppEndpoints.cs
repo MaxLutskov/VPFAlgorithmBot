@@ -9,7 +9,7 @@ public static class MiniAppEndpoints
 {
     public static void MapMiniAppApi(this WebApplication app)
     {
-        var api = app.MapGroup("/api/miniapp");
+        var api = app.MapGroup("/api/miniapp").AddEndpointFilter<AdminValidationFilter>();
         api.MapGet("/me", async (HttpRequest req, MiniAppAuth auth, AlgorithmDbContext db, CancellationToken ct) =>
         {
             var user = await auth.GetUserAsync(req, db, ct);
@@ -162,9 +162,12 @@ public static class MiniAppEndpoints
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
             try { _ = new Regex(data.MatchPattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)); }
             catch (ArgumentException) { return Results.BadRequest("Некоректне правило"); }
-            db.AlgorithmRules.Add(new AlgorithmRule { ObjectId = data.ObjectId, CategoryId = data.CategoryId,
-                Name = data.Name.Trim(), MatchPattern = data.MatchPattern, Priority = data.Priority, Enabled = data.Enabled });
-            await db.SaveChangesAsync(ct); return Results.Ok();
+            var rule = new AlgorithmRule { ObjectId = data.ObjectId, CategoryId = data.CategoryId,
+                Name = data.Name.Trim(), MatchPattern = data.MatchPattern, Priority = data.Priority, Enabled = data.Enabled };
+            db.AlgorithmRules.Add(rule);
+            await db.SaveChangesAsync(ct);
+            await AlgorithmCatalog.AddTestTemplatesAsync(db, rule, ct);
+            return Results.Ok();
         });
         api.MapPut("/admin/algorithms/{id:int}", async (int id, AlgorithmRule data, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
@@ -273,7 +276,7 @@ public static class MiniAppEndpoints
     private static IQueryable<Incident> Visible(AlgorithmDbContext db, AppUser user) => user.Role == "admin"
         ? db.Incidents : db.Incidents.Where(x => db.UserScopes.Any(s => s.UserId == user.Id && s.ObjectId == x.ObjectId));
 
-    private static async Task<bool> IsAdmin(HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct)
+    internal static async Task<bool> IsAdmin(HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct)
     {
         var user = await auth.GetUserAsync(req, db, ct);
         var authorized = user?.Role == "admin" && user.Status == "approved" && sessions.Valid(req, user.TelegramId);

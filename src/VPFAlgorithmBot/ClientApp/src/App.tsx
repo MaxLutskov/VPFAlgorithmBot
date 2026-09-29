@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { readApiResponse } from './apiResponse'
 
 declare global { interface Window { Telegram?: { WebApp?: { initData?: string, ready: () => void, expand: () => void } } } }
 type Incident = { id:number, chatId:number, objectId:number, categoryId:number, algorithmRuleId:number, startedAtUtc:string, endedAtUtc:string|null, problemState:string, answerState:string, firstResponseAtUtc:string|null, responseCount:number, quality:string }
@@ -8,11 +9,12 @@ const demoId = new URLSearchParams(location.search).get('demoUser') || '1'
 let adminToken = sessionStorage.getItem('vpfAdminToken') || ''
 async function api<T>(path:string, method='GET', body?:unknown):Promise<T> {
   const r = await fetch('/api/miniapp'+path,{method,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':window.Telegram?.WebApp?.initData || '', 'X-Demo-User-Id':demoId,'X-Admin-Token':adminToken},body:body===undefined?undefined:JSON.stringify(body)})
-  if(!r.ok) throw new Error((await r.text()).slice(0,300))
-  return r.json()
+  return readApiResponse<T>(r)
 }
 const date=(x:string|null)=>x?new Intl.DateTimeFormat('uk-UA',{timeZone:'Europe/Kyiv',dateStyle:'short',timeStyle:'medium'}).format(new Date(x)):'—'
 const kyivToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+const qualityLabels:Record<string,string>={historical:'Імпортовано з архіву Telegram',historical_inferred_start:'Архів: початок відновлено за тривалістю',historical_missing_end:'Архів: повідомлення про завершення відсутнє; поточний стан не підтверджено',historical_duration_mismatch:'Архів: час у повідомленнях відрізняється від зазначеної тривалості'}
+const quality=(x:string)=>qualityLabels[x]||''
 const state=(x:string)=>x==='Active'?'Активний':x==='Resolved'?'Завершений':x==='Answered'?'Відповідь надана':'Без відповіді'
 
 export default function App(){
@@ -56,8 +58,23 @@ export default function App(){
   async function submit(){
     const spec=specs[formType];if(!spec)return
     const body:Record<string,unknown>={}
-    spec.forEach(([key,type])=>{const value=form[key];body[key]=type==='number'?(value?Number(value):null):type==='bool'?value!=='false':value||null})
-    try{await api('/admin/'+formType+(editId?'/'+editId:''),editId?'PUT':'POST',body);setForm({});setEditId(null);setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Збережено')}catch(e){setNotice(String(e))}
+    try{
+      spec.forEach(([key,type])=>{
+        const value=(form[key]??'').trim()
+        if(type==='number'){
+          if(!value){
+            if(key==='senderTelegramId')body[key]=0
+            else if(key==='priority'||key==='sortOrder')body[key]=100
+            else if(formType==='routes' && ['chatId','objectId','categoryId'].includes(key))body[key]=null
+            else throw new Error(`Заповніть поле ${key}.`)
+          } else {const number=Number(value);if(!Number.isSafeInteger(number))throw new Error(`Поле ${key}: введіть ціле число.`);body[key]=number}
+        } else if(type==='bool') {
+          if(value && !['true','false'].includes(value))throw new Error(`Поле ${key}: введіть true або false.`)
+          body[key]=value!=='false'
+        } else {if(!value)throw new Error(`Заповніть поле ${key}.`);body[key]=value}
+      })
+      await api('/admin/'+formType+(editId?'/'+editId:''),editId?'PUT':'POST',body);setForm({});setEditId(null);setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Збережено')
+    }catch(e){setNotice(String(e))}
   }
   async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
   async function editUser(u:Record<string,unknown>){const displayName=prompt('Службове ім’я',String(u.displayName));if(!displayName)return;const role=prompt('Роль: admin, operator, viewer',String(u.role));if(!role)return;try{await api('/admin/users/'+u.id,'PUT',{displayName,role,status:u.status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
@@ -71,7 +88,7 @@ export default function App(){
       <section className="section-head"><h2>{tab==='dashboard'?'Активні алгоритми':'Історія алгоритмів'}</h2><select value={tab==='dashboard'?'active':filter} onChange={e=>setFilter(e.target.value)} disabled={tab==='dashboard'}><option value="active">Активні</option><option value="unanswered">Без відповіді</option><option value="all">Усі</option></select></section>
       <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id))}catch(e){setNotice(String(e))}}}>
         <div className="card-top"><b>Алгоритм №{i.id}</b><span className={i.problemState==='Active'?'badge active':'badge'}>{state(i.problemState)}</span></div>
-        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||`Об’єкт №${i.objectId}`} · {lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||`Тип №${i.algorithmRuleId}`}</p><small>Початок: {date(i.startedAtUtc)}</small><small>Завершення: {date(i.endedAtUtc)}</small><div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
+        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||`Об’єкт №${i.objectId}`} · {lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||`Тип №${i.algorithmRuleId}`}</p><small>Початок: {date(i.startedAtUtc)}</small><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
@@ -82,7 +99,7 @@ export default function App(){
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>
       <details><summary>Історія шаблонів ({catalog.templateVersions.length})</summary><pre>{JSON.stringify(catalog.templateVersions,null,2)}</pre></details><details><summary>Повідомлення для перевірки ({catalog.reviews.length})</summary><pre>{JSON.stringify(catalog.reviews,null,2)}</pre></details><details><summary>Журнал доставки ({catalog.outbox.length})</summary><pre>{JSON.stringify(catalog.outbox,null,2)}</pre></details><details><summary>Журнал змін ({catalog.audit.length})</summary><pre>{JSON.stringify(catalog.audit,null,2)}</pre></details>
     </>}</section>}
-    {detail&&<div className="overlay" onClick={()=>setDetail(null)}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setDetail(null)}>Закрити</button><h2>Алгоритм №{detail.id}</h2><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Початок: {date(detail.startedAtUtc)}<br/>Завершення: {date(detail.endedAtUtc)}</p><h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає. Їх можна надати в чаті з ботом навіть після завершення.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
+    {detail&&<div className="overlay" onClick={()=>setDetail(null)}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setDetail(null)}>Закрити</button><h2>Алгоритм №{detail.id}</h2><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Початок: {date(detail.startedAtUtc)}<br/>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає. Їх можна надати в чаті з ботом навіть після завершення.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
   </div>
 }
 

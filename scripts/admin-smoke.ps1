@@ -1,5 +1,6 @@
+param([string]$BaseUrl = "http://127.0.0.1:5179")
 $ErrorActionPreference = 'Stop'
-$base = 'http://127.0.0.1:5179/api/miniapp'
+$base = "$BaseUrl/api/miniapp"
 $headers = @{'X-Demo-User-Id'='1'}
 
 try {
@@ -67,3 +68,22 @@ if ($catalog.audit.Count -lt 8) { throw "Admin audit is incomplete: $($catalog.a
 Invoke-RestMethod -Uri "$base/admin/scopes/2/$($object.id)" -Method Delete -Headers $headers | Out-Null
 if ((Catalog).scopes | Where-Object { $_.userId -eq 2 -and $_.objectId -eq $object.id }) { throw 'Scope delete failed' }
 Write-Output "PASS chats objects categories algorithms routes templates scopes reminders preview audit=$($catalog.audit.Count)"
+
+function Expect-BadRequest($path, $body) {
+  try {
+    Send-Json $path 'POST' $body | Out-Null
+    throw "Invalid data accepted at $path"
+  } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
+    if ($_.Exception.Response.StatusCode.value__ -ne 400) { throw }
+  }
+}
+Expect-BadRequest '/admin/chats' @{telegramChatId=-1099;name='Duplicate'}
+Expect-BadRequest '/admin/chats' @{telegramChatId=0;name='Zero'}
+Expect-BadRequest '/admin/objects' @{code='TEST';name='Duplicate'}
+Expect-BadRequest '/admin/objects' @{code='';name='Empty code'}
+Expect-BadRequest '/admin/categories' @{name='Тестова категорія'}
+Expect-BadRequest '/admin/algorithms' @{objectId=999999;categoryId=$category.id;name='Missing object';matchPattern='x'}
+Expect-BadRequest '/admin/routes' @{userId=999999}
+Expect-BadRequest '/admin/scopes' @{userId=2;objectId=999999}
+if (((Catalog).templates | Where-Object algorithmRuleId -eq $algorithm.id).Count -ne 5) { throw 'New manual algorithm did not receive four initial templates' }
+Write-Output 'PASS duplicate and invalid catalog data rejected; manual algorithms receive four templates'
