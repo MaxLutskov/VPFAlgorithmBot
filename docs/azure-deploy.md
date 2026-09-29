@@ -1,6 +1,6 @@
 # Тестовий деплой VPF Algorithm Bot в Azure через GitHub Actions
 
-Ця інструкція відповідає наявному [workflow](../.github/workflows/build-and-deploy.yml): кожен push у `main` збирає Mini App і .NET, запускає тести; публікація в Azure запускається вручну через **Actions → Build and deploy VPF Algorithm Bot → Run workflow**. Workflow публікує код у вже створений App Service. Він **не створює** App Service, Azure SQL, Key Vault або права доступу.
+Ця інструкція відповідає наявному [workflow](../.github/workflows/main_vpfalgorithmbot.yml): кожен push у `main` збирає Mini App і .NET, запускає тести, публікує **лише вебпроєкт** та перевіряє `/health` на фактичному домені Web App. Workflow можна також запустити вручну через **Actions → Build and deploy VPF Algorithm Bot → Run workflow**. Він **не створює** App Service, Azure SQL, Key Vault або їхні налаштування.
 
 ## 1. Створити порожній репозиторій GitHub
 
@@ -40,19 +40,15 @@ git push -u origin main
 
 ## 3. Дати GitHub Actions право публікувати застосунок
 
-1. У Microsoft Entra ID створіть окрему **App registration** для GitHub Actions. Запишіть `Application (client) ID`, `Directory (tenant) ID` і Azure `Subscription ID`.
-2. У цієї реєстрації створіть **Federated credential**: issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, subject для GitHub environment `test`. Для репозиторіїв, створених після 15 липня 2026 року, GitHub використовує immutable subject, наприклад `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:test`. Перевірте фактичні owner/repository ID і точний subject, якщо Azure portal пропонує старий формат `repo:OWNER/REPO:environment:test`.
-3. На **конкретний App Service** призначте цій App registration роль **Website Contributor**. Права на всю підписку для публікації не потрібні.
-4. У GitHub відкрийте **Settings → Environments**, створіть environment з назвою `test`. Дозвольте деплой лише з `main`; за потреби додайте required reviewers.
-5. У environment `test` створіть **secrets** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` та **variable** `AZURE_WEBAPP_NAME` — точне ім'я App Service без `https://` і `.azurewebsites.net`.
+Поточний Web App `VPFAlgorithmBot` вже отримав GitHub OIDC credential через Azure Deployment Center. Azure створив три GitHub secrets з префіксами `AZUREAPPSERVICE_CLIENTID_`, `AZUREAPPSERVICE_TENANTID_`, `AZUREAPPSERVICE_SUBSCRIPTIONID_`. Workflow використовує саме їх, тому не створюйте другий набір credentials чи другий workflow. Деплойний identity і system-assigned identity Web App для Key Vault — різні облікові записи.
 
-Це відповідає `environment: test`, `id-token: write` і `azure/login@v2` у workflow. Publish profile та довготривалий Azure client secret не потрібні.
+Якщо Azure-ресурси/репозиторій будуть створені заново, налаштуйте GitHub OIDC і роль **Website Contributor** на конкретний Web App. Для нових репозиторіїв перевіряйте immutable subject GitHub з owner/repository ID; поточний credential прив'язаний до `main`. Publish profile та довготривалий Azure client secret не потрібні.
 
 ## 4. Запустити перший деплой
 
-1. Після push перевірте у **Actions**, що job `build` успішний. Push у `main` **не запускає** job `deploy`.
-2. Запустіть **Actions → Build and deploy VPF Algorithm Bot → Run workflow**, виберіть `main`. Після схвалення environment, якщо воно налаштоване, job `deploy` увійде в Azure через OIDC, опублікує артефакт і перевірить `/health`.
-3. Перевірте `https://APP.azurewebsites.net/health` і `https://APP.azurewebsites.net/miniapp/`. Якщо `/health` не відповідає, перевірте App Service log stream: застосунок виконує міграції Azure SQL ще до початку прийому запитів.
+1. Після push перевірте у **Actions**, що обидва jobs `build` і `deploy` успішні. Після публікації workflow перевіряє `/health` і позначає запуск помилкою, якщо застосунок не стартував.
+2. Перевірте `https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health` і `/miniapp/` на тому самому домені. У нових App Service фактичний hostname може містити додатковий ідентифікатор та регіон: не конструюйте адресу лише з імені ресурсу.
+3. Якщо `/health` не відповідає, перевірте **App Service → Log stream** та всі App settings із кроку 2. Зокрема, залишений за замовчуванням `Telegram:Mode=Demo` у Production призводить до помилки запуску; режим `Webhook` потребує Azure SQL, міграції якого виконуються ще до початку прийому запитів.
 
 ## 5. Підключити Telegram і перевірити сценарій
 

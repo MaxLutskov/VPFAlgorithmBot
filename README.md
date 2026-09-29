@@ -78,7 +78,7 @@ dotnet user-secrets set 'Admin:Password' 'STRONG_PASSWORD' --project src/VPFAlgo
 
 Під час створення App Service у Bicep обов’язково передайте Telegram ID першого адміністратора через `adminBootstrapTelegramId`; цей користувач активує доступ командою `/start`. Без цього початкове підтвердження нових користувачів буде недоступне.
 
-Workflow збирає Mini App і .NET, виконує domain-тести, публікує артефакт. Деплой запускається вручну (`workflow_dispatch`) у GitHub environment `test` з налаштованими `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_WEBAPP_NAME`. Після деплою потрібні `/health`, реальна перевірка Telegram і SQL views. Наявність шаблону деплою не означає, що Azure-ресурси вже налаштовані.
+Workflow збирає Mini App і .NET, виконує domain-тести, публікує лише вебпроєкт у Web App `VPFAlgorithmBot` через GitHub OIDC, налаштований Azure Deployment Center. Деплой запускається при push у `main` або вручну та перевіряє `/health` на фактичному домені застосунку. Для запуску необхідні Azure SQL, налаштування Telegram і Key Vault із [інструкції](docs/azure-deploy.md).
 
 ## Дані та звітність
 
