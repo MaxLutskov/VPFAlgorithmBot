@@ -86,6 +86,9 @@ jobs:
               raise SystemExit('Required App Service settings are missing; see docs/azure-deploy.md')
           if settings['Admin__Password'].startswith('@Microsoft.KeyVault('):
               raise SystemExit('Replace Admin__Password Key Vault reference with a direct App Service environment value')
+          connection = settings['ConnectionStrings__BotDatabase'].casefold().replace(' ', '')
+          if '{your_username}' in connection or 'authentication=activedirectoryintegrated' in connection:
+              raise SystemExit('Replace the sample Azure SQL connection string with working credentials in ConnectionStrings__BotDatabase')
           PY
       - name: Select web app startup DLL
         run: az webapp config set -g asp -n VPFAlgorithmBot --startup-file 'dotnet VPFAlgorithmBot.dll' -o none

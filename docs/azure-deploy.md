@@ -29,12 +29,14 @@ git push -u origin main
    | `Telegram__Mode` | `Webhook` |
    | `Telegram__BotToken` | токен нового Telegram-бота |
    | `Telegram__WebhookSecret` | довгий випадковий URL-safe секрет |
-   | `ConnectionStrings__BotDatabase` | рядок підключення до Azure SQL |
+   | `ConnectionStrings__BotDatabase` | робочий рядок підключення до Azure SQL; не залишайте `{your_username}` чи `Authentication=ActiveDirectoryIntegrated` із шаблону порталу |
    | `Admin__Password` | пароль адміністратора, заданий безпосередньо як значення змінної середовища |
    | `Admin__BootstrapTelegramId` | числовий Telegram ID першого адміністратора |
    | `Admin__KeyPath` | `/home/data-protection-keys` |
 
    Якщо плануєте повторні запуски або масштабування, налаштуйте постійне сховище для `/home`/ключів захисту даних. Збережіть налаштування App Service та дочекайтеся його перезапуску. Увімкніть HTTPS Only, Always On і Health check path `/health`.
+
+   Для SQL-автентифікації приклад структури значення: `Server=tcp:YOUR-SERVER.database.windows.net,1433;Database=YOUR-DATABASE;User ID=YOUR-SQL-USER;Password=YOUR-SQL-PASSWORD;Encrypt=True;TrustServerCertificate=False;`. Замініть усі плейсхолдери реальними значеннями лише в Azure App Service. SQL-пароль і пароль адміністратора бота — різні секрети. SQL-користувачу потрібні права на міграції у схемі `vpfalgo`.
 
 Замість ручного створення App Service можна використати [Bicep-шаблон](../infra/main.bicep). Він очікує **наявний** App Service Plan і не створює SQL та GitHub OIDC identity. Секрети при запуску Bicep передавайте як захищені параметри, не через файл у репозиторії.
 
@@ -67,7 +69,7 @@ git push -u origin main
 | --- | --- |
 | `azure/login` відхилено | Federated credential `subject` (зокрема immutable IDs), audience, tenant/client/subscription ID, роль на App Service. |
 | Build не проходить | Логи `pnpm`, .NET restore, domain-тестів; ресурс Azure до цього етапу не потрібен. |
-| Деплой пройшов, `/health` недоступний | Доступ до Azure SQL, connection string, права на міграції, App Service logs. |
+| Деплой пройшов, `/health` недоступний | Доступ до Azure SQL, реальний `ConnectionStrings__BotDatabase` без плейсхолдерів, права на міграції, App Service logs. `Failed to authenticate the user {your_username}` означає, що в App Service залишився шаблонний рядок підключення. |
 | Не працює адмін-вхід | Значення `Admin__Password` в App Service, `Admin__BootstrapTelegramId`, `/start`. |
 | Telegram не приносить повідомлень | `getWebhookInfo`, URL та секрет шляху, Bot-to-Bot Mode, права бота в групі, `chat ID` і `sender ID`. |
 
