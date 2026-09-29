@@ -34,6 +34,7 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|10.0'
+      appCommandLine: 'dotnet VPFAlgorithmBot.dll'
       alwaysOn: true
       healthCheckPath: '/health'
       minTlsVersion: '1.2'

@@ -50,6 +50,8 @@ git push -u origin main
 2. Перевірте `https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health` і `/miniapp/` на тому самому домені. У нових App Service фактичний hostname може містити додатковий ідентифікатор та регіон: не конструюйте адресу лише з імені ресурсу.
 3. Якщо `/health` не відповідає, перевірте **App Service → Log stream** та всі App settings із кроку 2. Зокрема, залишений за замовчуванням `Telegram:Mode=Demo` у Production призводить до помилки запуску; режим `Webhook` потребує Azure SQL, міграції якого виконуються ще до початку прийому запитів.
 
+Для Web App `VPFAlgorithmBot` команда запуску явно задана як `dotnet VPFAlgorithmBot.dll`. Це усуває неоднозначність, якщо після старого деплою в `/home/site/wwwroot` залишився файл `VPFAlgorithmBot.Tests.runtimeconfig.json`: Oryx інакше запускає стандартний сайт Azure.
+
 ## 5. Підключити Telegram і перевірити сценарій
 
 1. Створіть нового бота в BotFather. Додайте його в тестовий чат із Bot_Outlook. Для читання повідомлень іншого бота перевірте **Bot-to-Bot Communication Mode** і права/Privacy Mode у групі. Визначте числові `chat ID` та `sender ID` Bot_Outlook для правил джерела.

@@ -84,6 +84,8 @@ jobs:
           if any(not settings.get(key) for key in required):
               raise SystemExit('Required App Service settings are missing; see docs/azure-deploy.md')
           PY
+      - name: Select web app startup DLL
+        run: az webapp config set -g asp -n VPFAlgorithmBot --startup-file 'dotnet VPFAlgorithmBot.dll' -o none
       - name: Enable startup diagnostics
         run: az webapp log config -g asp -n VPFAlgorithmBot --docker-container-logging filesystem --level error -o none
       - name: Deploy to Azure Web App
@@ -92,7 +94,7 @@ jobs:
           app-name: VPFAlgorithmBot
           package: publish
       - name: Health check
-        run: curl --fail --show-error --silent --retry 10 --retry-delay 6 --retry-connrefused 'https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health'
+        run: curl --fail --show-error --silent --retry 12 --retry-delay 10 --retry-all-errors --max-time 15 'https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health'
       - name: Classify startup failure
         if: failure()
         run: |
