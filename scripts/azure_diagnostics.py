@@ -86,6 +86,8 @@ for metric, aggregation in [('CpuTime', 'Total'), ('MemoryWorkingSet', 'Average'
     })
     if data is None:
         continue
+    if not data.get('value'):
+        emit('metric ' + metric, {'available': False, 'reason': 'no metric data returned'})
     for item in data.get('value', []):
         values = []
         missing = 0
@@ -114,3 +116,37 @@ if detectors:
         if re.search(r'quota|linux.*(cpu|memory|down)|app.?down|availability', str(detector_id) + ' ' + title, re.I):
             selected.append({'id': detector_id, 'title': title})
     emit('relevantDetectors', selected)
+
+for detector_id in ('LinuxAppDown', 'LinuxAppDown2'):
+    result = get('detector ' + detector_id, app_id + '/detectors/' + detector_id, **{
+        'api-version': '2025-05-01', 'startTime': iso(day_start), 'endTime': iso(now),
+    })
+    if not result:
+        continue
+    # Detector output can contain application log text. Export only schema metadata,
+    # numeric facts and fixed diagnostic classifications, never original text cells.
+    markers = ('quota', 'wpstoprequests', 'restart', 'crash', 'cpu', 'memory', 'disk',
+               'storage', 'hour', 'minute', 'sql', 'authentication', 'start limit',
+               'container exit', 'container failed', 'unhealthy', 'blocked')
+    for index, dataset in enumerate((result.get('properties') or {}).get('dataset') or []):
+        table = dataset.get('table') or {}
+        columns = [col.get('columnName') for col in table.get('columns', [])]
+        rows = table.get('rows') or []
+        summaries = []
+        for row_index, row in enumerate(rows):
+            row_text = json.dumps(row).casefold()
+            matches = [marker for marker in markers if marker in row_text]
+            if not matches:
+                continue
+            numeric = {}
+            for column, value in zip(columns, row):
+                if re.search(r'quota|limit|count|restart|time|value|status', str(column), re.I):
+                    if isinstance(value, (int, float)) or re.fullmatch(r'-?\d+(\.\d+)?', str(value)):
+                        numeric[column] = value
+                    elif re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ][\d:.+Z-]+', str(value)):
+                        numeric[column] = value
+            summaries.append({'row': row_index, 'markers': matches, 'numeric': numeric,
+                              'durationsOrCounts': re.findall(r'\b\d+\s+(?:restarts?|stops?|minutes?|hours?)\b', row_text)})
+        emit('detectorTable', {'detector': detector_id, 'table': index,
+                               'columns': columns, 'rowCount': len(rows),
+                               'matchingRows': summaries[:40]})
