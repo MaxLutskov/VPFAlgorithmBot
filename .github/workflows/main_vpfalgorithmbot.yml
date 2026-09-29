@@ -55,6 +55,35 @@ jobs:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_46BD1E48310D4385AFA7800F9C7DBC98 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_8C1600560E3C4748AA7BF24AE62FC3B7 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_6903D4EE33B04AD8A7EDC99A95A38BEA }}
+      - name: Check Azure startup configuration
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          resource_group = 'asp'
+          app_name = 'VPFAlgorithmBot'
+          def az_json(*args):
+              return json.loads(subprocess.check_output(['az', *args, '-o', 'json'], text=True))
+
+          app = az_json('webapp', 'show', '-g', resource_group, '-n', app_name)
+          print('App state:', app.get('state'))
+          print('Runtime:', (app.get('siteConfig') or {}).get('linuxFxVersion'))
+          settings = {
+              item['name']: item.get('value')
+              for item in az_json('webapp', 'config', 'appsettings', 'list', '-g', resource_group, '-n', app_name)
+          }
+          required = (
+              'Telegram__Mode', 'Telegram__BotToken', 'Telegram__WebhookSecret',
+              'ConnectionStrings__BotDatabase', 'Admin__Password', 'Admin__BootstrapTelegramId',
+          )
+          for key in required:
+              print(f'{key}: {"configured" if settings.get(key) else "MISSING"}')
+          if settings.get('Telegram__Mode') != 'Webhook':
+              raise SystemExit('Telegram__Mode must be Webhook in Azure Production')
+          if any(not settings.get(key) for key in required):
+              raise SystemExit('Required App Service settings are missing; see docs/azure-deploy.md')
+          PY
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
