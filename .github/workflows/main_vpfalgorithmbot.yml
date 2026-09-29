@@ -91,3 +91,30 @@ jobs:
           package: publish
       - name: Health check
         run: curl --fail --show-error --silent --retry 10 --retry-delay 6 --retry-connrefused 'https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health'
+      - name: Classify startup failure
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import subprocess
+
+          result = subprocess.run(
+              ['az', 'webapp', 'log', 'startup', 'show', '-g', 'asp', '-n', 'VPFAlgorithmBot'],
+              capture_output=True, text=True, timeout=30,
+          )
+          log = result.stdout + '\n' + result.stderr
+          print('Startup log command succeeded:', result.returncode == 0)
+          checks = {
+              'SQL connection or migration failure': ('SqlException', 'SqlClient', 'Login failed', 'Cannot open server'),
+              'Database network failure': ('network-related', 'TCP Provider', 'server was not found'),
+              'Missing runtime configuration': ('is required', 'Unknown Telegram:Mode', 'Demo mode is available only'),
+              'File access failure': ('UnauthorizedAccessException', 'Access to the path'),
+              'Runtime startup failure': ('Failed to start', 'container did not respond', 'startup failed'),
+          }
+          matched = False
+          for label, markers in checks.items():
+              if any(marker.casefold() in log.casefold() for marker in markers):
+                  print('Detected:', label)
+                  matched = True
+          if not matched:
+              print('No recognized failure signature; inspect App Service > Monitoring > Log stream.')
+          PY
