@@ -1,0 +1,6 @@
+name: vpf-algorithm-bot
+services:
+  web:
+    project: ./src/VPFAlgorithmBot
+    language: dotnet
+    host: appservice

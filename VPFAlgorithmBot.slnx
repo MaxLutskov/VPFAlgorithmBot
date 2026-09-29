@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VPFAlgorithmBot/VPFAlgorithmBot.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VPFAlgorithmBot.Tests/VPFAlgorithmBot.Tests.csproj" />
+  </Folder>
+</Solution>

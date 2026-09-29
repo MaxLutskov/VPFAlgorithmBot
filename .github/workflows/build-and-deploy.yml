@@ -1,0 +1,51 @@
+name: Build and deploy VPF Algorithm Bot
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - uses: pnpm/action-setup@v4
+        with: { version: '11.19.0' }
+      - name: Build Mini App
+        working-directory: src/VPFAlgorithmBot/ClientApp
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '10.0.x' }
+      - name: Restore and run domain tests
+        run: |
+          dotnet restore VPFAlgorithmBot.slnx
+          dotnet run --project tests/VPFAlgorithmBot.Tests/VPFAlgorithmBot.Tests.csproj --no-restore
+      - name: Publish
+        run: dotnet publish src/VPFAlgorithmBot/VPFAlgorithmBot.csproj -c Release -o publish --no-restore
+      - uses: actions/upload-artifact@v4
+        with: { name: webapp, path: publish }
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: webapp, path: publish }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          package: publish
+      - name: Health check
+        run: curl --fail --retry 5 --retry-delay 5 "https://${{ vars.AZURE_WEBAPP_NAME }}.azurewebsites.net/health"

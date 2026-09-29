@@ -1,0 +1,160 @@
+using System.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using VPFAlgorithmBot.Data;
+
+namespace VPFAlgorithmBot.Domain;
+
+public sealed record InboundEvent(long ChatTelegramId, long SenderTelegramId, int MessageTelegramId, DateTimeOffset TelegramDateUtc, string Text);
+public sealed record IngestResult(string Status, long? IncidentId = null, string? Reason = null);
+
+public sealed class IncidentService(AlgorithmDbContext db)
+{
+    public async Task<IngestResult> IngestAsync(InboundEvent input, CancellationToken ct = default)
+    {
+        var chat = await db.Chats.SingleOrDefaultAsync(x => x.TelegramChatId == input.ChatTelegramId && x.Enabled, ct);
+        if (chat is null) return new("Ignored", Reason: "Невідомий чат");
+        if (chat.SenderTelegramId != 0 && chat.SenderTelegramId != input.SenderTelegramId)
+            return new("Ignored", Reason: "Невідомий відправник");
+        var previous = await db.IncomingMessages.AsNoTracking().SingleOrDefaultAsync(x => x.ChatId == chat.Id && x.TelegramMessageId == input.MessageTelegramId, ct);
+        if (previous is not null) return new("Duplicate", previous.IncidentId);
+
+        var message = new IncomingMessage
+        {
+            ChatId = chat.Id, TelegramMessageId = input.MessageTelegramId,
+            SenderTelegramId = input.SenderTelegramId, TelegramDateUtc = input.TelegramDateUtc,
+            ReceivedAtUtc = DateTimeOffset.UtcNow, Text = input.Text.Length > 4000 ? input.Text[..4000] : input.Text
+        };
+        var kind = EventParser.Kind(input.Text);
+        if (kind is null)
+        {
+            message.Status = "ignored";
+            db.IncomingMessages.Add(message);
+            await db.SaveChangesAsync(ct);
+            return new("Ignored", Reason: "Немає маркера");
+        }
+        AlgorithmRule rule;
+        DateTimeOffset occurred;
+        try
+        {
+            rule = EventParser.MatchRule(await db.AlgorithmRules.AsNoTracking().Where(x => x.Enabled).ToListAsync(ct), input.Text);
+            occurred = EventParser.ParseTime(input.TelegramDateUtc, input.Text);
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.RegularExpressions.RegexMatchTimeoutException or ArgumentException)
+        {
+            message.Status = "review";
+            message.ParseError = ex.Message;
+            db.IncomingMessages.Add(message);
+            await db.SaveChangesAsync(ct);
+            return new("Review", Reason: ex.Message);
+        }
+
+        await using IDbContextTransaction? transaction = db.Database.IsInMemory()
+            ? null : await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        db.IncomingMessages.Add(message);
+        await db.SaveChangesAsync(ct);
+        if (kind == "problem")
+        {
+            if (await db.Incidents.AnyAsync(x => x.ChatId == chat.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null, ct))
+            {
+                message.Status = "review";
+                message.ParseError = "Повторне червоне повідомлення для відкритого алгоритму";
+                await db.SaveChangesAsync(ct);
+                if (transaction is not null) await transaction.CommitAsync(ct);
+                return new("Review", Reason: message.ParseError);
+            }
+            var incident = new Incident
+            {
+                ChatId = chat.Id, ObjectId = rule.ObjectId, CategoryId = rule.CategoryId,
+                AlgorithmRuleId = rule.Id, StartedAtUtc = occurred, StartMessageId = message.Id
+            };
+            db.Incidents.Add(incident);
+            await db.SaveChangesAsync(ct);
+            message.Status = "processed";
+            message.IncidentId = incident.Id;
+            await QueueNotificationsAsync(incident, "problem", ct);
+            await db.SaveChangesAsync(ct);
+            if (transaction is not null) await transaction.CommitAsync(ct);
+            return new("Created", incident.Id);
+        }
+        var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
+        if (candidates.Count != 1 || occurred < candidates[0].StartedAtUtc)
+        {
+            message.Status = "review";
+            message.ParseError = candidates.Count == 0 ? "Немає відповідного початку" : candidates.Count > 1 ? "Кілька відкритих випадків" : "Завершення раніше початку";
+            await db.SaveChangesAsync(ct);
+            if (transaction is not null) await transaction.CommitAsync(ct);
+            return new("Review", Reason: message.ParseError);
+        }
+        var current = candidates[0];
+        current.EndedAtUtc = occurred;
+        current.EndMessageId = message.Id;
+        message.Status = "processed";
+        message.IncidentId = current.Id;
+        await QueueNotificationsAsync(current, "recovery", ct);
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
+        return new("Resolved", current.Id);
+    }
+
+    private async Task QueueNotificationsAsync(Incident incident, string kind, CancellationToken ct)
+    {
+        var applicable = await db.RouteRules.AsNoTracking().Where(x => x.Enabled &&
+            (x.ChatId == null || x.ChatId == incident.ChatId) &&
+            (x.ObjectId == null || x.ObjectId == incident.ObjectId) &&
+            (x.CategoryId == null || x.CategoryId == incident.CategoryId)).ToListAsync(ct);
+        if (applicable.Count == 0) return;
+        var score = applicable.Max(x => (x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1));
+        var bestPriority = applicable.Where(x => ((x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1)) == score).Min(x => x.Priority);
+        var recipients = applicable.Where(x => ((x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1)) == score && x.Priority == bestPriority)
+            .Select(x => x.UserId).Distinct().ToArray();
+        var valid = await db.Users.Where(x => recipients.Contains(x.Id) && x.Status == "approved").Select(x => x.Id).ToListAsync(ct);
+        var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
+        var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
+        foreach (var userId in valid)
+        {
+            db.NotificationOutbox.Add(new NotificationOutbox
+            {
+                IncidentId = incident.Id, UserId = userId, Kind = kind,
+                Text = kind == "problem" ? $"🔴 Алгоритм №{incident.Id}: {obj?.Name} — {rule?.Name}. Надати відповідь можна також після завершення."
+                    : $"🟢 Алгоритм №{incident.Id} завершився. Якщо відповіді ще немає, її можна надати зараз.",
+                DueAtUtc = DateTimeOffset.UtcNow
+            });
+        }
+    }
+
+    public async Task<IncidentResponse> RespondAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(text) && templateId is null) throw new ArgumentException("Порожня відповідь");
+        await using IDbContextTransaction? transaction = db.Database.IsInMemory()
+            ? null : await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var old = await db.Responses.SingleOrDefaultAsync(x => x.ActionKey == actionKey, ct);
+        if (old is not null) return old;
+        var user = await db.Users.Include(x => x.Scopes).SingleOrDefaultAsync(x => x.TelegramId == telegramUserId && x.Status == "approved", ct)
+            ?? throw new UnauthorizedAccessException("Доступ не підтверджено");
+        var incident = await db.Incidents.FindAsync([incidentId], ct) ?? throw new ArgumentException("Алгоритм не знайдено");
+        if (user.Role != "admin" && (user.Role != "operator" || !user.Scopes.Any(x => x.ObjectId == incident.ObjectId)))
+            throw new UnauthorizedAccessException("Немає доступу до об’єкта");
+        ResponseTemplate? template = null;
+        if (templateId is not null)
+        {
+            template = await db.ResponseTemplates.SingleOrDefaultAsync(x => x.Id == templateId && x.Enabled, ct)
+                ?? throw new ArgumentException("Шаблон не знайдено");
+            if (template.AlgorithmRuleId != incident.AlgorithmRuleId)
+                throw new UnauthorizedAccessException("Шаблон недоступний для алгоритму");
+            text = template.Text + (string.IsNullOrWhiteSpace(text) ? "" : "\n" + text.Trim());
+        }
+        if (text.Length > 2000) throw new ArgumentException("Відповідь завелика");
+        var response = new IncidentResponse
+        {
+            IncidentId = incidentId, UserId = user.Id, TemplateId = template?.Id,
+            TemplateVersion = template?.Version, Text = text.Trim(),
+            CreatedAtUtc = DateTimeOffset.UtcNow, ActionKey = actionKey
+        };
+        db.Responses.Add(response);
+        db.AuditEvents.Add(new AuditEvent { ActorUserId = user.Id, Action = "respond", Entity = "incident", EntityId = incidentId, CreatedAtUtc = response.CreatedAtUtc });
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
+        return response;
+    }
+}
