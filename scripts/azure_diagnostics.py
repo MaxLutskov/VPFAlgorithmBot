@@ -113,7 +113,7 @@ if detectors:
         info = (item.get('properties') or {}).get('metadata') or {}
         detector_id = info.get('id') or item.get('name')
         title = info.get('name') or ''
-        if re.search(r'quota|linux.*(cpu|memory|down)|app.?down|availability', str(detector_id) + ' ' + title, re.I):
+        if re.search(r'quota|free|stop|limit|restart|crash|linux.*(cpu|memory|down)|app.?down|availability', str(detector_id) + ' ' + title, re.I):
             selected.append({'id': detector_id, 'title': title})
     emit('relevantDetectors', selected)
 
@@ -128,6 +128,14 @@ for detector_id in ('LinuxAppDown', 'LinuxAppDown2'):
     markers = ('quota', 'wpstoprequests', 'restart', 'crash', 'cpu', 'memory', 'disk',
                'storage', 'hour', 'minute', 'sql', 'authentication', 'start limit',
                'container exit', 'container failed', 'unhealthy', 'blocked')
+    causes = ('SqlException', 'Failed to authenticate', 'ActiveDirectoryIntegrated',
+              'Login failed', 'CREATE TABLE permission denied', 'CREATE VIEW permission denied',
+              'CREATE SCHEMA permission denied', 'Cannot find the schema', 'does not exist',
+              'already exists', 'Cannot open server', 'is not allowed to access the server',
+              'Cannot open database', 'network-related', 'TCP Provider', 'timeout expired',
+              'OutOfMemory', 'OOM', 'exit code 137', 'exit code 134', 'exit code 1',
+              'did not respond', "didn't respond", 'failed to start', 'quota exceeded',
+              'UnauthorizedAccessException', 'no space left on device', '{your_username}')
     for index, dataset in enumerate((result.get('properties') or {}).get('dataset') or []):
         table = dataset.get('table') or {}
         columns = [col.get('columnName') for col in table.get('columns', [])]
@@ -146,6 +154,8 @@ for detector_id in ('LinuxAppDown', 'LinuxAppDown2'):
                     elif re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ][\d:.+Z-]+', str(value)):
                         numeric[column] = value
             summaries.append({'row': row_index, 'markers': matches, 'numeric': numeric,
+                              'causeMarkers': [cause for cause in causes if cause.casefold() in row_text],
+                              'utcTimes': sorted(set(re.findall(r'\b2026-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?', row_text)))[-20:],
                               'durationsOrCounts': re.findall(r'\b\d+\s+(?:restarts?|stops?|minutes?|hours?)\b', row_text)})
         emit('detectorTable', {'detector': detector_id, 'table': index,
                                'columns': columns, 'rowCount': len(rows),
