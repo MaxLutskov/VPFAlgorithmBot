@@ -27,7 +27,7 @@
 | Генерація SQL migration | PASS | `dotnet ef migrations script --idempotent`: створює схему `vpfalgo` та два Power BI views; SQL на сервері не виконувався |
 | SQL Server migration і SQL views | BLOCKED | Скрипт згенеровано, але backfill старих шаблонів і SQL views не виконано на тестовому SQL Server/Azure SQL; у sandbox LocalDB не створює екземпляр |
 | Bot_Outlook у реальному чаті | BLOCKED | Потрібні токен нового бота та тестовий Telegram-чат |
-| Azure Key Vault | BLOCKED | Немає тестового Key Vault і managed identity |
+| Пароль адміністратора в Azure Web App | BLOCKED | Потрібна перевірка в налаштуваннях розгорнутого Web App |
 | Azure App Service | BLOCKED | Немає тестового App Service та OIDC-конфігурації |
 | Візуальна перевірка Mini App | PASS | У браузері перевірено дешборд, історію, картку випадку, адмінпанель та операторський режим; мобільний viewport ще не тестувався |
 | Повна регресія CRUD адмінпанелі | PASS | `scripts/admin-smoke.ps1` у demo-режимі |

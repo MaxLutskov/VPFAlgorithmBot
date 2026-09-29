@@ -79,10 +79,13 @@ jobs:
           )
           for key in required:
               print(f'{key}: {"configured" if settings.get(key) else "MISSING"}')
+          print('Admin__KeyPath:', 'configured' if settings.get('Admin__KeyPath') else 'using Azure writable default')
           if settings.get('Telegram__Mode') != 'Webhook':
               raise SystemExit('Telegram__Mode must be Webhook in Azure Production')
           if any(not settings.get(key) for key in required):
               raise SystemExit('Required App Service settings are missing; see docs/azure-deploy.md')
+          if settings['Admin__Password'].startswith('@Microsoft.KeyVault('):
+              raise SystemExit('Replace Admin__Password Key Vault reference with a direct App Service environment value')
           PY
       - name: Select web app startup DLL
         run: az webapp config set -g asp -n VPFAlgorithmBot --startup-file 'dotnet VPFAlgorithmBot.dll' -o none

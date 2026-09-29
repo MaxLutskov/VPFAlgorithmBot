@@ -53,8 +53,8 @@ dotnet run --project tests/VPFAlgorithmBot.Tests/VPFAlgorithmBot.Tests.csproj
 | `Telegram:WebhookSecret` | Окремий випадковий секрет URL |
 | `ConnectionStrings:BotDatabase` | Azure SQL connection string |
 | `Admin:BootstrapTelegramId` | Telegram ID першого адміністратора |
-| `Admin:Password` | Пароль із Azure Key Vault reference |
-| `Admin:KeyPath` | Каталог ключів адміністративних сесій, на Azure `/home/data-protection-keys` |
+| `Admin:Password` | Пароль зі змінної середовища Azure Web App `Admin__Password` |
+| `Admin:KeyPath` | Каталог ключів адміністративних сесій; в Azure типово використовується `/home/data-protection-keys` |
 | `Reminder:Minutes` | Типовий інтервал, 0 вимикає; адміністратор може змінити в Mini App |
 
 Приклад локальних User Secrets:
@@ -74,11 +74,11 @@ dotnet user-secrets set 'Admin:Password' 'STRONG_PASSWORD' --project src/VPFAlgo
 
 Покрокове налаштування нового репозиторію, Azure-ресурсів, GitHub OIDC і першого деплою: [інструкція з деплою](docs/azure-deploy.md).
 
-Підхід такий самий, як у локального StockPartsBot: окремий Linux App Service з .NET 10, за потреби той самий App Service Plan, спільна Azure SQL Database **лише через окрему схему `vpfalgo`**, GitHub Actions з OIDC. Шаблон `infra/main.bicep` не створює SQL Server і не змінює StockPartsBot. До першого запуску створіть окремого SQL-користувача або managed identity з правами на схему `vpfalgo`; перевірте міграції на тестовій копії. App Service managed identity має отримати право читання потрібного секрету Key Vault.
+Підхід такий самий, як у локального StockPartsBot: окремий Linux App Service з .NET 10, за потреби той самий App Service Plan, спільна Azure SQL Database **лише через окрему схему `vpfalgo`**, GitHub Actions з OIDC. Шаблон `infra/main.bicep` не створює SQL Server і не змінює StockPartsBot. До першого запуску створіть окремого SQL-користувача або managed identity з правами на схему `vpfalgo`; перевірте міграції на тестовій копії. Пароль адміністратора задайте безпосередньо у змінній середовища `Admin__Password` в Azure Web App.
 
 Під час створення App Service у Bicep обов’язково передайте Telegram ID першого адміністратора через `adminBootstrapTelegramId`; цей користувач активує доступ командою `/start`. Без цього початкове підтвердження нових користувачів буде недоступне.
 
-Workflow збирає Mini App і .NET, виконує domain-тести, публікує лише вебпроєкт у Web App `VPFAlgorithmBot` через GitHub OIDC, налаштований Azure Deployment Center. Деплой запускається при push у `main` або вручну та перевіряє `/health` на фактичному домені застосунку. Для запуску необхідні Azure SQL, налаштування Telegram і Key Vault із [інструкції](docs/azure-deploy.md).
+Workflow збирає Mini App і .NET, виконує domain-тести, публікує лише вебпроєкт у Web App `VPFAlgorithmBot` через GitHub OIDC, налаштований Azure Deployment Center. Деплой запускається при push у `main` або вручну та перевіряє `/health` на фактичному домені застосунку. Для запуску необхідні Azure SQL, налаштування Telegram і пароль адміністратора у змінній середовища за [інструкцією](docs/azure-deploy.md).
 
 ## Дані та звітність
 
@@ -86,7 +86,7 @@ Workflow збирає Mini App і .NET, виконує domain-тести, пуб
 
 ## Відомі межі тестового випуску
 
-- Реальне отримання повідомлень Bot_Outlook, Azure SQL, Key Vault і App Service не перевірені без відповідних доступів.
+- Реальне отримання повідомлень Bot_Outlook, Azure SQL і App Service не перевірені без відповідних доступів.
 - Demo InMemory не зберігає дані між перезапусками. Для перевірки міграцій і збереження потрібен тестовий SQL Server або Azure SQL.
 - Налаштування графіків змін і автоматичне заміщення працівників поки не реалізовані.
 - Розбір повідомлень базується на правилах regex; для нових форматів додайте й перевірте правила в Mini App.

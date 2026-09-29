@@ -19,8 +19,9 @@ param telegramBotToken string
 @secure()
 param telegramWebhookSecret string
 
-@description('Azure Key Vault secret URI for the admin password')
-param adminPasswordSecretUri string
+@description('Admin password supplied as a secure deployment parameter')
+@secure()
+param adminPassword string
 
 @description('Telegram ID of the first administrator')
 param adminBootstrapTelegramId string
@@ -45,7 +46,7 @@ resource app 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'Telegram__BotToken', value: telegramBotToken }
         { name: 'Telegram__WebhookSecret', value: telegramWebhookSecret }
         { name: 'ConnectionStrings__BotDatabase', value: databaseConnectionString }
-        { name: 'Admin__Password', value: '@Microsoft.KeyVault(SecretUri=${adminPasswordSecretUri})' }
+        { name: 'Admin__Password', value: adminPassword }
         { name: 'Admin__BootstrapTelegramId', value: adminBootstrapTelegramId }
         { name: 'Admin__KeyPath', value: '/home/data-protection-keys' }
       ]

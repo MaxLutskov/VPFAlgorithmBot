@@ -19,7 +19,7 @@
 - Telegram Bot API через `HttpClient`: локальний polling або тестовий імітатор; на Azure — webhook. Режими взаємовиключні.
 - Mini App на React + TypeScript + Vite; збірка у `wwwroot/miniapp` ASP.NET Core застосунку. Авторизація через перевірку Telegram Mini App `initData` на сервері.
 - Azure App Service Linux з .NET 10, `Always On`, `/health`, HTTPS; окремий застосунок із власним ботом, за сумісності на наявному App Service Plan.
-- Azure Key Vault для адміністративного пароля через managed identity; локально .NET User Secrets. Адміністративна сесія прив’язана до особистого Telegram ID.
+- Змінна середовища Azure Web App `Admin__Password` для адміністративного пароля; локально .NET User Secrets. Адміністративна сесія прив’язана до особистого Telegram ID.
 - GitHub Actions з OpenID Connect за підходом StockPartsBot. Реальний деплой проводиться після локального тестування й отримання доступів.
 - SQL views у схемі `vpfalgo` та окрема роль читання для Power BI.
 
@@ -51,7 +51,7 @@ src/VPFAlgorithmBot/
   Domain/             розпізнавання, зіставлення, стани
   Telegram/           update-моделі, клієнт, webhook/polling, кнопки відповідей
   Api/                Mini App та адміністративні endpoints
-  Services/           outbox, нагадування, аудит, Key Vault
+  Services/           outbox, нагадування, аудит
   ClientApp/          React + TypeScript + Vite
   wwwroot/miniapp/     зібрана Mini App
 tests/VPFAlgorithmBot.Tests/
@@ -80,7 +80,7 @@ docs/                 архітектура, експлуатація, Power BI
 
 ## Тестування після повної збірки
 
-Провести domain-тести, інтеграційні тести API з тестовим SQL Server, браузерні тести Mini App та demo наскрізний прогін. Якщо тестової Azure SQL або SQL Server немає, ці перевірки позначити `BLOCKED`, а не підміняти SQLite. Реальний Bot_Outlook, Key Vault і App Service перевірити окремо після надання доступів.
+Провести domain-тести, інтеграційні тести API з тестовим SQL Server, браузерні тести Mini App та demo наскрізний прогін. Якщо тестової Azure SQL або SQL Server немає, ці перевірки позначити `BLOCKED`, а не підміняти SQLite. Реальний Bot_Outlook і App Service перевірити окремо після надання доступів.
 
 Критичні сценарії: 🔴 → активний без відповіді; 🟢 → завершений без відповіді; відповідь у чаті після 🟢 → завершений з відповіддю без зміни `EndedAt`; повтор update і callback; кілька одночасних відповідей; повторне спрацювання того самого алгоритму; однаковий текст у різних чатах; неоднозначне зелене; опівніч; блокування користувача; версії шаблонів; недоступність Telegram; перезапуск; міграція; правильність SQL views.
 

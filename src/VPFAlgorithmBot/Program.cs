@@ -22,7 +22,15 @@ builder.Services.AddDbContext<AlgorithmDbContext>(options =>
         sql.EnableRetryOnFailure(3);
     });
 });
-var keyPath = builder.Configuration["Admin:KeyPath"] ?? Path.Combine(builder.Environment.ContentRootPath, ".data-protection-keys");
+var keyPath = builder.Configuration["Admin:KeyPath"];
+if (string.IsNullOrWhiteSpace(keyPath))
+{
+    var azureHome = Environment.GetEnvironmentVariable("HOME");
+    keyPath = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME")) &&
+              !string.IsNullOrWhiteSpace(azureHome)
+        ? Path.Combine(azureHome, "data-protection-keys")
+        : Path.Combine(builder.Environment.ContentRootPath, ".data-protection-keys");
+}
 Directory.CreateDirectory(keyPath);
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyPath));
 builder.Services.AddScoped<IncidentService>();
