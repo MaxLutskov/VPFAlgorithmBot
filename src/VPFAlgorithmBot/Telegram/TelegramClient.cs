@@ -26,9 +26,14 @@ public sealed class TelegramClient(HttpClient http, IConfiguration config)
         CallAsync("answerCallbackQuery", new { callback_query_id = id, text }, ct);
     public Task<JsonElement> DeleteWebhookAsync(CancellationToken ct) =>
         CallAsync("deleteWebhook", new { drop_pending_updates = false }, ct);
+    public Task<JsonElement> GetWebhookInfoAsync(CancellationToken ct) =>
+        CallAsync("getWebhookInfo", new { }, ct);
+    public Task<JsonElement> SetWebhookAsync(string url, CancellationToken ct) =>
+        CallAsync("setWebhook", new { url, allowed_updates = new[] { "message", "channel_post", "callback_query" },
+            drop_pending_updates = false }, ct);
     public async Task<IReadOnlyList<TelegramUpdate>> GetUpdatesAsync(long offset, CancellationToken ct)
     {
-        var json = await CallAsync("getUpdates", new { offset, timeout = 25, allowed_updates = new[] { "message", "callback_query" } }, ct);
+        var json = await CallAsync("getUpdates", new { offset, timeout = 25, allowed_updates = new[] { "message", "channel_post", "callback_query" } }, ct);
         return JsonSerializer.Deserialize<List<TelegramUpdate>>(json.GetRawText()) ?? [];
     }
 }

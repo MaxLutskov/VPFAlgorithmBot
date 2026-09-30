@@ -4,7 +4,8 @@ using VPFAlgorithmBot.Domain;
 
 namespace VPFAlgorithmBot.Telegram;
 
-public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService incidents, TelegramClient telegram, IConfiguration config)
+public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService incidents, TelegramClient telegram,
+    IConfiguration config, ILogger<BotUpdateService> logger)
 {
     public async Task HandleAsync(TelegramUpdate update, CancellationToken ct)
     {
@@ -13,12 +14,16 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             await HandleCallbackAsync(callback, ct);
             return;
         }
-        if (update.Message is not { } message || string.IsNullOrWhiteSpace(message.Text)) return;
+        var message = update.Message ?? update.ChannelPost;
+        if (message is null || string.IsNullOrWhiteSpace(message.Text)) return;
         var sender = message.From;
         if (message.Chat.Type != "private")
         {
-            await incidents.IngestAsync(new InboundEvent(message.Chat.Id, sender?.Id ?? 0, message.MessageId,
+            var senderId = sender?.Id ?? message.SenderChat?.Id ?? 0;
+            var result = await incidents.IngestAsync(new InboundEvent(message.Chat.Id, senderId, message.MessageId,
                 DateTimeOffset.FromUnixTimeSeconds(message.Date), message.Text), ct);
+            logger.LogInformation("Telegram source update: chat={ChatId}, sender={SenderId}, message={MessageId}, status={Status}, reason={Reason}",
+                message.Chat.Id, senderId, message.MessageId, result.Status, result.Reason);
             return;
         }
         if (sender is null) return;

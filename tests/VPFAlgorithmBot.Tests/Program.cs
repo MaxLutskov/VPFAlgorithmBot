@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using VPFAlgorithmBot.Api;
 using VPFAlgorithmBot.Data;
 using VPFAlgorithmBot.Domain;
+using VPFAlgorithmBot.Telegram;
 
 static void Check(bool condition, string message)
 {
@@ -61,6 +62,9 @@ try
 catch (UnauthorizedAccessException) { Console.WriteLine("PASS unauthorized user denied"); }
 var otherChat = new InboundEvent(-9999, 77, 103, started, first.Text);
 Check((await service.IngestAsync(otherChat)).Status == "Ignored", "unknown chat ignored");
+var channelUpdate = System.Text.Json.JsonSerializer.Deserialize<TelegramUpdate>("""{"channel_post":{"message_id":104,"date":1790580000,"chat":{"id":-1001,"type":"channel"},"text":"🟢 09:07:57 ВФС: Тест Тривалість: 1m 0s"}}""");
+Check(channelUpdate?.ChannelPost?.Chat.Id == -1001 && channelUpdate.ChannelPost.MessageId == 104,
+    "Telegram channel_post updates are decoded");
 Console.WriteLine("ALL DOMAIN TESTS PASSED");
 
 await using var discoveryDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
@@ -166,6 +170,23 @@ Check(await exportDb.Incidents.AnyAsync(x => x.Quality == "export_complete") &&
 exportJson.Position = 0;
 var repeatedExport = await TelegramDesktopImport.ImportAsync(exportJson, exportChat, exportService, exportNow);
 Check(repeatedExport.Duplicates == 3 && await exportDb.Incidents.CountAsync() == 2, "repeated export does not duplicate incidents");
+
+var localExportPath = Environment.GetEnvironmentVariable("VPF_TEST_EXPORT_PATH");
+if (!string.IsNullOrWhiteSpace(localExportPath))
+{
+    await using var realDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+        .UseInMemoryDatabase("real-export-" + Guid.NewGuid()).Options);
+    var realChat = new SourceChat { TelegramChatId = -5307285804, SenderTelegramId = 8924298166,
+        Name = "Алгоритми ВФС" };
+    realDb.Chats.Add(realChat);
+    await realDb.SaveChangesAsync();
+    await using var realFile = File.OpenRead(localExportPath);
+    var realResult = await TelegramDesktopImport.ImportAsync(realFile, realChat, new IncidentService(realDb), DateTimeOffset.UtcNow);
+    Check(realResult.EligibleMessages > 0 && realResult.ImportedMessages > 0 &&
+        await realDb.Incidents.AnyAsync(),
+        $"local VFS export imports incidents (eligible={realResult.EligibleMessages}, imported={realResult.ImportedMessages}, review={realResult.NeedsReview})");
+    Console.WriteLine($"Local VFS export: resolved={await realDb.Incidents.CountAsync(x => x.EndedAtUtc != null)}, active={await realDb.Incidents.CountAsync(x => x.EndedAtUtc == null)}");
+}
 
 await using var sharedDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("shared-" + Guid.NewGuid()).Options);

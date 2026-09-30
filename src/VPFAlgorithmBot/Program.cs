@@ -40,6 +40,7 @@ builder.Services.AddScoped<AdminSession>();
 builder.Services.AddHttpClient<TelegramClient>(client => client.Timeout = TimeSpan.FromSeconds(40));
 builder.Services.AddHostedService<NotificationWorker>();
 builder.Services.AddHostedService<TelegramPollingWorker>();
+builder.Services.AddHostedService<WebhookRegistrationWorker>();
 builder.Services.AddHealthChecks();
 var app = builder.Build();
 app.UseStaticFiles();

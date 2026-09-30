@@ -57,7 +57,7 @@ git push -u origin main
 ## 5. Підключити Telegram і перевірити сценарій
 
 1. Створіть нового бота в BotFather. Додайте його в тестовий чат із Bot_Outlook. Для читання повідомлень іншого бота перевірте **Bot-to-Bot Communication Mode** і права/Privacy Mode у групі. Визначте числові `chat ID` та `sender ID` Bot_Outlook для правил джерела.
-2. Після успішного деплою зареєструйте webhook Telegram за адресою `https://APP.azurewebsites.net/api/telegram/WEBHOOK_SECRET`, де `WEBHOOK_SECRET` точно збігається з `Telegram__WebhookSecret`. У поточній реалізації перевіряється секрет **у шляху URL**; сам лише параметр Telegram `secret_token` його не заміняє. Дозвольте update-и `message` і `callback_query`.
+2. Після успішного деплою застосунок сам реєструє webhook Telegram за адресою поточного Azure Web App. Перевірте його через **Адмінпанель → Прийом повідомлень із чатів → Перевірити підключення**. Шлях містить `Telegram__WebhookSecret`; сам лише параметр Telegram `secret_token` його не заміняє. Приймаються update-и `message`, `channel_post` і `callback_query`.
 3. У BotFather задайте menu button / Mini App URL `https://APP.azurewebsites.net/miniapp/`. Перший адміністратор з ID у `Admin__BootstrapTelegramId` надсилає боту `/start`, після чого відкриває Mini App і входить у панель адміністратора з паролем зі змінної `Admin__Password`.
 4. У Mini App додайте чат-джерело, ID відправника, об'єкти, алгоритми, маршрути відповідальних і **шаблони конкретних алгоритмів**. Створіть тестове червоне повідомлення та відповідне зелене, перевірте приватне сповіщення, відповідь після завершення, історію й SQL views для Power BI.
 

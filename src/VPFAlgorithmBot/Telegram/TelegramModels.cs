@@ -6,6 +6,7 @@ public sealed class TelegramUpdate
 {
     [JsonPropertyName("update_id")] public long UpdateId { get; set; }
     [JsonPropertyName("message")] public TelegramMessage? Message { get; set; }
+    [JsonPropertyName("channel_post")] public TelegramMessage? ChannelPost { get; set; }
     [JsonPropertyName("callback_query")] public TelegramCallback? CallbackQuery { get; set; }
 }
 public sealed class TelegramMessage
@@ -14,6 +15,7 @@ public sealed class TelegramMessage
     [JsonPropertyName("date")] public long Date { get; set; }
     [JsonPropertyName("chat")] public TelegramChat Chat { get; set; } = new();
     [JsonPropertyName("from")] public TelegramUser? From { get; set; }
+    [JsonPropertyName("sender_chat")] public TelegramChat? SenderChat { get; set; }
     [JsonPropertyName("text")] public string? Text { get; set; }
 }
 public sealed class TelegramChat

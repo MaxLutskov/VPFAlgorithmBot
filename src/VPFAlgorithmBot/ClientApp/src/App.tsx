@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { readApiResponse } from './apiResponse'
 import { AdminCatalog, AdminUsers, AdminLogs, keyLabels, labels, specs, type Catalog } from './AdminCatalog'
 
 declare global { interface Window { Telegram?: { WebApp?: { initData?: string, ready: () => void, expand: () => void } } } }
 type Incident = { id:number, chatId:number, objectId:number, categoryId:number, algorithmRuleId:number, startedAtUtc:string, endedAtUtc:string|null, problemState:string, answerState:string, firstResponseAtUtc:string|null, responseCount:number, quality:string }
-type Detail = Incident & { responses:{id:number, author:string, text:string, createdAtUtc:string}[] }
+type Detail = Incident & { responses:{id:number, author:string, text:string, createdAtUtc:string}[],templates:{id:number,title:string,text:string}[] }
+type SourceStatus = {webhookConfigured:boolean,pendingUpdates:number,lastWebhookError:string|null,chats:{id:number,name:string,enabled:boolean,telegramChatId:number,senderTelegramId:number,lastMessage:{telegramDateUtc:string,receivedAtUtc:string,senderTelegramId:number,status:string,parseError:string|null}|null,lastProcessedLiveAtUtc:string|null,incidents:number,active:number}[]}
 const demoId = new URLSearchParams(location.search).get('demoUser') || '1'
 let adminToken = sessionStorage.getItem('vpfAdminToken') || ''
 async function api<T>(path:string, method='GET', body?:unknown):Promise<T> {
@@ -24,7 +25,13 @@ export default function App(){
   const [stats,setStats]=useState<Record<string,number>>({})
   const [items,setItems]=useState<Incident[]>([])
   const [detail,setDetail]=useState<Detail|null>(null)
+  const [selectedTemplate,setSelectedTemplate]=useState('')
+  const [answerText,setAnswerText]=useState('')
+  const [responseBusy,setResponseBusy]=useState(false)
+  const [responseNotice,setResponseNotice]=useState('')
+  const responseRequestId=useRef<string|null>(null)
   const [filter,setFilter]=useState('active')
+  const [selectedChatId,setSelectedChatId]=useState('')
   const [period,setPeriod]=useState('all')
   const [fromDate,setFromDate]=useState(kyivToday)
   const [toDate,setToDate]=useState(kyivToday)
@@ -35,7 +42,9 @@ export default function App(){
   const [formType,setFormType]=useState('chats')
   const [form,setForm]=useState<Record<string,string>>({})
   const [editId,setEditId]=useState<number|null>(null)
-  const [lookups,setLookups]=useState<{objects:{id:number,name:string,code:string}[],algorithms:{id:number,name:string}[]}>({objects:[],algorithms:[]})
+  const [lookups,setLookups]=useState<{objects:{id:number,name:string,code:string}[],algorithms:{id:number,name:string}[],chats:{id:number,name:string}[]}>({objects:[],algorithms:[],chats:[]})
+  const [sourceStatus,setSourceStatus]=useState<SourceStatus|null>(null)
+  const [sourceStatusBusy,setSourceStatusBusy]=useState(false)
   const [reminder,setReminder]=useState('0')
   const [exportChatId,setExportChatId]=useState('')
   const [exportFile,setExportFile]=useState<File|null>(null)
@@ -51,11 +60,12 @@ export default function App(){
       setLookups(await api('/lookups'))
       if(tab==='dashboard'||filter==='active')params.set('state','active')
       else if(filter==='unanswered')params.set('answer','unanswered')
+      if(tab==='history'&&selectedChatId)params.set('chatId',selectedChatId)
       setItems(await api<Incident[]>('/incidents?'+params))
       if(tab==='admin' && adminToken) {const c=await api<Catalog>('/admin/catalog');setCatalog(c);setReminder(c.settings.find(x=>x.key==='reminder_minutes')?.value||'0')}
       setNotice('')
     }catch(e){setItems([]);setStats({});setNotice(String(e))}finally{setBusy(false)}
-  },[filter,tab,period,fromDate,toDate])
+  },[filter,tab,period,fromDate,toDate,selectedChatId])
   useEffect(()=>{window.Telegram?.WebApp?.ready();window.Telegram?.WebApp?.expand();void load()},[load])
 
   async function unlock(){try{const result=await api<{token:string}>('/admin/signin','POST',{password});adminToken=result.token;sessionStorage.setItem('vpfAdminToken',adminToken);const c=await api<Catalog>('/admin/catalog');setCatalog(c);setReminder(c.settings.find(x=>x.key==='reminder_minutes')?.value||'0');setNotice('Адміністративний доступ відкрито')}catch(e){setNotice(String(e))}}
@@ -101,6 +111,28 @@ export default function App(){
       setNotice(`За останні 72 години: знайдено ${result.eligibleMessages}, імпортовано ${result.importedMessages}. Дублікати: ${result.duplicates}; потребують перевірки: ${result.needsReview}.`)
     }catch(e){setNotice(String(e))}finally{setImporting(false)}
   }
+  async function submitResponse(){
+    if(!detail||responseBusy)return
+    if(!selectedTemplate&&!answerText.trim()){setResponseNotice('Оберіть готову відповідь або введіть власний текст.');return}
+    if(!responseRequestId.current)responseRequestId.current=crypto.randomUUID()
+    setResponseBusy(true)
+    setResponseNotice('')
+    try{
+      await api(`/incidents/${detail.id}/responses`,'POST',{templateId:selectedTemplate?Number(selectedTemplate):null,text:answerText.trim(),requestId:responseRequestId.current})
+      responseRequestId.current=null
+      setSelectedTemplate('');setAnswerText('')
+      setDetail(await api<Detail>(`/incidents/${detail.id}`))
+      await load()
+      setResponseNotice('Відповідь збережено.')
+      setNotice('Відповідь збережено.')
+    }catch(e){setResponseNotice(String(e))}finally{setResponseBusy(false)}
+  }
+  async function checkSources(){
+    if(sourceStatusBusy)return
+    setSourceStatusBusy(true)
+    try{setSourceStatus(await api<SourceStatus>('/admin/source-status'))}
+    catch(e){setNotice(String(e))}finally{setSourceStatusBusy(false)}
+  }
   return <div className="shell">
     <header><div><p className="eyebrow">VPF ALGORITHM BOT</p><h1>Виробничі алгоритми</h1><p>{me?.displayName || 'Завантаження облікового запису'}</p></div><button className="refresh" onClick={()=>void load()}>{busy?'Оновлення…':'Оновити'}</button></header>
     <nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>Дешборд</button><button className={tab==='history'?'selected':''} onClick={()=>{setFilter('all');setTab('history')}}>Історія</button>{me?.role==='admin'&&<button className={tab==='admin'?'selected':''} onClick={()=>setTab('admin')}>Адмінпанель</button>}</nav>
@@ -108,13 +140,14 @@ export default function App(){
     {tab!=='admin'&&<>
       <section className="period-bar"><label>Період<select value={period} onChange={e=>setPeriod(e.target.value)}><option value="today">Сьогодні</option><option value="yesterday">Вчора</option><option value="range">За датами</option><option value="all">За весь час</option></select></label>{period==='range'&&<><label>Від<input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)}/></label><label>До<input type="date" value={toDate} onChange={e=>setToDate(e.target.value)}/></label></>}<small>За датою початку алгоритму, час Києва</small></section>
       <section className="metrics"><div><strong>{stats.active??0}</strong><span>Активні</span></div><div><strong>{stats.unanswered??0}</strong><span>Без відповіді</span></div><div><strong>{stats.resolvedUnanswered??0}</strong><span>Завершені без відповіді</span></div></section>
-      <section className="section-head"><h2>{tab==='dashboard'?'Активні алгоритми':'Історія алгоритмів'}</h2><select value={tab==='dashboard'?'active':filter} onChange={e=>setFilter(e.target.value)} disabled={tab==='dashboard'}><option value="active">Активні</option><option value="unanswered">Без відповіді</option><option value="all">Усі</option></select></section>
-      <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id))}catch(e){setNotice(String(e))}}}>
+      <section className="section-head"><h2>{tab==='dashboard'?'Активні алгоритми':'Історія алгоритмів'}</h2><div className="history-filters">{tab==='history'&&<select aria-label="Чат" value={selectedChatId} onChange={e=>setSelectedChatId(e.target.value)}><option value="">Усі чати</option>{lookups.chats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>}<select value={tab==='dashboard'?'active':filter} onChange={e=>setFilter(e.target.value)} disabled={tab==='dashboard'}><option value="active">Активні</option><option value="unanswered">Без відповіді</option><option value="all">Усі</option></select></div></section>
+      <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id));setSelectedTemplate('');setAnswerText('');setResponseNotice('');responseRequestId.current=null}catch(e){setNotice(String(e))}}}>
         <div className="card-top"><div><b>{lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||'Алгоритм'}</b><small>{date(i.startedAtUtc)}</small></div><span className={i.problemState==='Active'?'badge active':'badge'}>{state(i.problemState)}</span></div>
-        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||'Об’єкт не визначено'}</p><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
+        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||'Об’єкт не визначено'} · {lookups.chats.find(x=>x.id===i.chatId)?.name||'Чат не визначено'}</p><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
+      <div className="panel"><h3>Прийом повідомлень із чатів</h3><p>Перевірте webhook і останні події кожного чату. Повідомлення Bot_Outlook надходитимуть лише коли для цього бота ввімкнено Bot-to-Bot Communication у BotFather і він має права адміністратора чату або вимкнений Privacy Mode.</p><button onClick={()=>void checkSources()} disabled={sourceStatusBusy}>{sourceStatusBusy?'Перевіряємо…':'Перевірити підключення'}</button>{sourceStatus&&<div className="source-status" role="status"><p>Webhook: <b>{sourceStatus.webhookConfigured?'налаштований':'не налаштований або адреса не збігається'}</b>; очікують доставлення: {sourceStatus.pendingUpdates}</p>{sourceStatus.lastWebhookError&&<p>Помилка Telegram: {sourceStatus.lastWebhookError}</p>}{sourceStatus.chats.map(c=><div className="source-row" key={c.id}><strong>{c.name}</strong><span>Зареєстровано алгоритмів: {c.incidents}, активних: {c.active}</span><span>Останнє повідомлення: {date(c.lastMessage?.telegramDateUtc||null)} ({c.lastMessage?.status||'ще немає'})</span><span>Остання оброблена подія з чату: {date(c.lastProcessedLiveAtUtc)}</span>{c.lastMessage?.parseError&&<span>Причина відхилення: {c.lastMessage.parseError}</span>}</div>)}</div>}</div>
       <label>Довідник<select value={formType} onChange={e=>{setFormType(e.target.value);setForm({});setEditId(null)}}>{Object.keys(specs).map(x=><option key={x} value={x}>{labels[x]}</option>)}</select></label>
       <AdminCatalog catalog={catalog} formType={formType} form={form} setForm={setForm} editId={editId} onSubmit={()=>void submit()}
         onEdit={row=>{setEditId(Number(row.id));setForm(Object.fromEntries(specs[formType].map(([key])=>[key,String(row[key]??'')])));window.scrollTo({top:0,behavior:'smooth'})}}
@@ -125,6 +158,6 @@ export default function App(){
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>
       <AdminLogs catalog={catalog}/>
     </>}</section>}
-    {detail&&<div className="overlay" onClick={()=>setDetail(null)}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setDetail(null)}>Закрити</button><h2>{lookups.algorithms.find(x=>x.id===detail.algorithmRuleId)?.name||'Алгоритм'}</h2><p>{date(detail.startedAtUtc)} · {lookups.objects.find(x=>x.id===detail.objectId)?.name||'Об’єкт не визначено'}</p><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає. Їх можна надати в чаті з ботом навіть після завершення.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
+    {detail&&<div className="overlay" onClick={()=>{if(!responseBusy)setDetail(null)}}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" disabled={responseBusy} onClick={()=>setDetail(null)}>Закрити</button><h2>{lookups.algorithms.find(x=>x.id===detail.algorithmRuleId)?.name||'Алгоритм'}</h2><p>{date(detail.startedAtUtc)} · {lookups.objects.find(x=>x.id===detail.objectId)?.name||'Об’єкт не визначено'}</p><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<div className="answer-form"><h3>Надати відповідь</h3><p>Відповідь можна додати і після завершення алгоритму.</p><label>Готова відповідь<select value={selectedTemplate} disabled={responseBusy} onChange={e=>{setSelectedTemplate(e.target.value);responseRequestId.current=null}}><option value="">Оберіть шаблон (необов’язково)</option>{detail.templates.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></label>{selectedTemplate&&<p className="template-preview">{detail.templates.find(t=>String(t.id)===selectedTemplate)?.text}</p>}<label>Власна відповідь або уточнення<textarea value={answerText} maxLength={2000} disabled={responseBusy} onChange={e=>{setAnswerText(e.target.value);responseRequestId.current=null}} placeholder="Опишіть виконані дії"/></label><button className="save-response" disabled={responseBusy||(!selectedTemplate&&!answerText.trim())} onClick={()=>void submitResponse()}>{responseBusy?<><span className="spinner" aria-hidden="true"/> Зберігаємо…</>:'Зберегти відповідь'}</button>{responseNotice&&<p className="answer-notice" role="status">{responseNotice}</p>}</div><h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
   </div>
 }

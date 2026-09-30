@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using VPFAlgorithmBot.Data;
 using VPFAlgorithmBot.Domain;
+using VPFAlgorithmBot.Telegram;
 
 namespace VPFAlgorithmBot.Api;
 
@@ -40,12 +41,14 @@ public static class MiniAppEndpoints
             var canonical = AlgorithmCatalog.CanonicalIds(rules, objects);
             return Results.Ok(new {
                 Objects=objects.Where(x=>ids.Contains(x.Id)).Select(x=>new{x.Id,x.Name,x.Code}).ToList(),
+                Chats=await db.Chats.AsNoTracking().Where(x=>x.Enabled).OrderBy(x=>x.Name)
+                    .Select(x=>new{x.Id,x.Name}).ToListAsync(ct),
                 Algorithms=rules.Where(x=>canonical[x.Id]==x.Id && families.Contains(AlgorithmCatalog.Family(objects.First(o=>o.Id==x.ObjectId).Code)))
                     .Select(x=>new{x.Id,x.Name}).ToList()
             });
         });
         api.MapGet("/incidents", async (HttpRequest req, MiniAppAuth auth, AlgorithmDbContext db, string? state, string? answer,
-            string? period, string? fromDate, string? toDate, int? skip, CancellationToken ct) =>
+            string? period, string? fromDate, string? toDate, int? chatId, int? skip, CancellationToken ct) =>
         {
             var user = await auth.GetUserAsync(req, db, ct);
             if (user is null) return Results.Unauthorized();
@@ -53,6 +56,7 @@ public static class MiniAppEndpoints
                 DateTimeOffset.UtcNow, out var query, out var error)) return Results.BadRequest(error);
             if (state == "active") query = query.Where(x => x.EndedAtUtc == null);
             if (state == "resolved") query = query.Where(x => x.EndedAtUtc != null);
+            if (chatId is not null) query = query.Where(x => x.ChatId == chatId);
             if (answer == "unanswered") query = query.Where(x => !x.Responses.Any());
             if (answer == "answered") query = query.Where(x => x.Responses.Any());
             var rows = await query.OrderByDescending(x => x.StartedAtUtc).ThenByDescending(x => x.Id)
@@ -76,14 +80,37 @@ public static class MiniAppEndpoints
             if (incident is null) return Results.NotFound();
             var names = await db.Users.Where(x => incident.Responses.Select(r => r.UserId).Contains(x.Id))
                 .ToDictionaryAsync(x => x.Id, x => x.DisplayName, ct);
+            var templates = await db.ResponseTemplates.AsNoTracking()
+                .Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
+                .OrderBy(x => x.SortOrder).ThenBy(x => x.Id)
+                .Select(x => new { x.Id, x.Title, x.Text }).ToListAsync(ct);
             return Results.Ok(new
             {
                 incident.Id, incident.ChatId, incident.ObjectId, incident.CategoryId, incident.AlgorithmRuleId,
                 incident.StartedAtUtc, incident.EndedAtUtc, incident.Quality,
                 incident.ProblemState, incident.AnswerState,
+                Templates = templates,
                 Responses = incident.Responses.OrderBy(x => x.CreatedAtUtc).Select(x => new
                 { x.Id, Author = names.GetValueOrDefault(x.UserId, ""), x.Text, x.CreatedAtUtc, x.TemplateId, x.TemplateVersion })
             });
+        });
+        api.MapPost("/incidents/{id:long}/responses", async (long id, ResponseEdit data, HttpRequest req,
+            MiniAppAuth auth, AlgorithmDbContext db, IncidentService incidents, CancellationToken ct) =>
+        {
+            var user = await auth.GetUserAsync(req, db, ct);
+            if (user is null) return Results.Unauthorized();
+            if (!await Visible(db, user).AnyAsync(x => x.Id == id, ct)) return Results.NotFound();
+            if (data.TemplateId is null && string.IsNullOrWhiteSpace(data.Text))
+                return Results.BadRequest("Оберіть готову відповідь або введіть власний текст.");
+            if (!Guid.TryParse(data.RequestId, out var requestId)) return Results.BadRequest("Некоректний ідентифікатор запиту.");
+            try
+            {
+                var saved = await incidents.RespondAsync(id, user.TelegramId, data.Text ?? "", data.TemplateId,
+                    $"miniapp:{requestId:N}", ct);
+                return Results.Ok(new { saved.Id });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+            catch (UnauthorizedAccessException) { return Results.StatusCode(403); }
         });
         api.MapPost("/admin/signin", async (SignIn request, HttpRequest http, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
@@ -117,6 +144,36 @@ public static class MiniAppEndpoints
                 Reviews = await db.IncomingMessages.Where(x => x.Status == "review").OrderByDescending(x => x.Id).Take(100).ToListAsync(ct),
                 Outbox = await db.NotificationOutbox.OrderByDescending(x => x.Id).Take(100).ToListAsync(ct)
                 ,Audit = await db.AuditEvents.OrderByDescending(x => x.Id).Take(100).ToListAsync(ct)
+            });
+        });
+        api.MapGet("/admin/source-status", async (HttpRequest req, MiniAppAuth auth, AdminSession sessions,
+            AlgorithmDbContext db, TelegramClient telegram, IConfiguration config, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var webhook = await telegram.GetWebhookInfoAsync(ct);
+            var url = webhook.TryGetProperty("url", out var urlValue) ? urlValue.GetString() : null;
+            var expectedPath = "/api/telegram/" + config["Telegram:WebhookSecret"];
+            var webhookReady = Uri.TryCreate(url, UriKind.Absolute, out var webhookUri) &&
+                webhookUri.AbsolutePath == expectedPath;
+            var chats = await db.Chats.AsNoTracking().OrderBy(x => x.Name).ToListAsync(ct);
+            var status = new List<object>();
+            foreach (var chat in chats)
+            {
+                var last = await db.IncomingMessages.AsNoTracking().Where(x => x.ChatId == chat.Id)
+                    .OrderByDescending(x => x.Id).Select(x => new { x.TelegramDateUtc, x.ReceivedAtUtc,
+                        x.SenderTelegramId, x.Status, x.ParseError }).FirstOrDefaultAsync(ct);
+                var lastLive = await db.IncomingMessages.AsNoTracking().Where(x => x.ChatId == chat.Id && x.Status == "processed")
+                    .MaxAsync(x => (DateTimeOffset?)x.ReceivedAtUtc, ct);
+                status.Add(new { chat.Id, chat.Name, chat.Enabled, chat.TelegramChatId, chat.SenderTelegramId,
+                    LastMessage = last, LastProcessedLiveAtUtc = lastLive,
+                    Incidents = await db.Incidents.CountAsync(x => x.ChatId == chat.Id, ct),
+                    Active = await db.Incidents.CountAsync(x => x.ChatId == chat.Id && x.EndedAtUtc == null, ct) });
+            }
+            return Results.Ok(new {
+                WebhookConfigured = webhookReady,
+                PendingUpdates = webhook.TryGetProperty("pending_update_count", out var pending) ? pending.GetInt32() : 0,
+                LastWebhookError = webhook.TryGetProperty("last_error_message", out var error) ? error.GetString() : null,
+                Chats = status
             });
         });
         api.MapPost("/admin/import-export/{chatId:int}", async (int chatId, HttpRequest req, MiniAppAuth auth,
@@ -341,5 +398,6 @@ public static class MiniAppEndpoints
     private sealed record PreviewRequest(string Text, DateTimeOffset TelegramDateUtc);
     private sealed record DemoMessage(long ChatTelegramId, long SenderTelegramId, int MessageTelegramId, DateTimeOffset TelegramDateUtc, string Text);
     private sealed record DemoResponse(long IncidentId, long TelegramUserId, int? TemplateId, string? Text);
+    private sealed record ResponseEdit(int? TemplateId, string? Text, string? RequestId);
     private sealed record ReminderEdit(int Minutes);
 }
