@@ -4,6 +4,8 @@ import collections
 import re
 import subprocess
 import tempfile
+import json
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -39,3 +41,29 @@ with tempfile.TemporaryDirectory() as directory:
     print("Exception classes:", errors.most_common(20))
     print("Outbound HTTP status codes:", http_statuses.most_common())
     print("Project stack frames:", frames.most_common(20))
+
+settings_result = subprocess.run(
+    ["az", "webapp", "config", "appsettings", "list", "-g", "asp", "-n", "VPFAlgorithmBot", "-o", "json", "--only-show-errors"],
+    text=True, capture_output=True, timeout=60,
+)
+if settings_result.returncode:
+    print("Webhook status unavailable: Azure settings query failed")
+else:
+    settings = {item["name"]: item.get("value") for item in json.loads(settings_result.stdout)}
+    token = settings.get("Telegram__BotToken")
+    secret = settings.get("Telegram__WebhookSecret")
+    if not token:
+        print("Webhook status unavailable: bot token is missing")
+    else:
+        try:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=20) as response:
+                info = json.load(response)["result"]
+            error = info.get("last_error_message") or ""
+            print("Webhook status:", {
+                "url_matches_secret_path": bool(secret and info.get("url", "").endswith("/api/telegram/" + secret)),
+                "pending_updates": info.get("pending_update_count"),
+                "last_error_at_utc": info.get("last_error_date"),
+                "last_error_http_status": re.findall(r"\b[45]\d\d\b", error),
+            })
+        except Exception as exc:
+            print("Webhook status unavailable:", type(exc).__name__)
