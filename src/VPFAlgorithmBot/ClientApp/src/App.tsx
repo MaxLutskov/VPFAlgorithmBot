@@ -42,6 +42,8 @@ export default function App(){
   const [formType,setFormType]=useState('chats')
   const [form,setForm]=useState<Record<string,string>>({})
   const [editId,setEditId]=useState<number|null>(null)
+  const [pendingDelete,setPendingDelete]=useState<{type:string,target:string,label:string}|null>(null)
+  const [deleting,setDeleting]=useState(false)
   const [lookups,setLookups]=useState<{objects:{id:number,name:string,code:string}[],algorithms:{id:number,name:string}[],chats:{id:number,name:string}[]}>({objects:[],algorithms:[],chats:[]})
   const [sourceStatus,setSourceStatus]=useState<SourceStatus|null>(null)
   const [sourceStatusBusy,setSourceStatusBusy]=useState(false)
@@ -108,11 +110,28 @@ export default function App(){
       setEditId(null);setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Збережено')
     }catch(e){setNotice(String(e))}
   }
-  async function removeCatalog(row:Record<string,unknown>){
-    const target=formType==='routes'?String(row.userId):String(row.id)
-    if(!window.confirm(formType==='routes'?'Прибрати всі призначення цього працівника?':'Видалити запис із робочого довідника? Історичні дані залишаться.'))return
-    try{await api(formType==='routes'?`/admin/responsibilities/${target}`:`/admin/${formType}/${target}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Запис прибрано з робочого довідника')}
-    catch(e){setNotice(String(e))}
+  function requestDelete(row:Record<string,unknown>){
+    setPendingDelete({type:formType,target:String(formType==='routes'?row.userId:row.id),label:String(row.name??row.title??catalog?.users.find(x=>x.id===row.userId)?.displayName??'запис')})
+  }
+  async function confirmDelete(){
+    if(!pendingDelete||deleting)return
+    const {type,target}=pendingDelete
+    setPendingDelete(null)
+    setDeleting(true)
+    const previous=catalog
+    setCatalog(current=>{
+      if(!current)return current
+      if(type==='routes')return {...current,routes:current.routes.filter(x=>String(x.userId)!==target)}
+      const rows=current[type as keyof Catalog] as Record<string,unknown>[]
+      return {...current,[type]:rows.map(row=>String(row.id)===target?{...row,enabled:false}:row)}
+    })
+    setNotice('Видаляємо запис…')
+    try{
+      await api(type==='routes'?`/admin/responsibilities/${target}`:`/admin/${type}/${target}`,'DELETE')
+      setNotice('Запис прибрано з робочого довідника')
+      void api<Catalog>('/admin/catalog').then(setCatalog).catch(()=>{})
+    }catch(e){setCatalog(previous);setNotice(String(e))}
+    finally{setDeleting(false)}
   }
   async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
   async function saveUser(u:Record<string,unknown>,displayName:string,role:string){try{if(!displayName.trim())throw new Error('Введіть службове ім’я.');await api('/admin/users/'+u.id,'PUT',{displayName:displayName.trim(),role,status:u.status});setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Користувача оновлено')}catch(e){setNotice(String(e))}}
@@ -167,12 +186,13 @@ export default function App(){
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
+      {pendingDelete&&<div className="delete-confirm" role="alertdialog" aria-label="Підтвердження видалення"><div><strong>Прибрати «{pendingDelete.label}»?</strong><p>{pendingDelete.type==='routes'?'Усі призначення цього працівника буде видалено.':'Запис зникне з робочого довідника. Історичні дані залишаться.'}</p></div><div className="actions"><button className="danger" onClick={()=>void confirmDelete()}>Так, прибрати</button><button className="secondary" onClick={()=>setPendingDelete(null)}>Скасувати</button></div></div>}
       <details className="panel source-details"><summary>Стан прийому повідомлень із чатів</summary><p>Перевірте webhook і останні події кожного чату. Повідомлення Bot_Outlook надходитимуть лише коли для цього бота ввімкнено Bot-to-Bot Communication у BotFather і він має права адміністратора чату або вимкнений Privacy Mode.</p><button onClick={()=>void checkSources()} disabled={sourceStatusBusy}>{sourceStatusBusy?'Перевіряємо…':'Перевірити підключення'}</button>{sourceStatus&&<div className="source-status" role="status"><p>Webhook: <b>{sourceStatus.webhookConfigured?'налаштований':'не налаштований або адреса не збігається'}</b>; {sourceStatus.pendingUpdates===0?'черга доставлення порожня':`очікують доставлення: ${sourceStatus.pendingUpdates}`}</p>{sourceStatus.lastWebhookError&&<p>Остання помилка Telegram ({date(sourceStatus.lastWebhookErrorAtUtc)}): {sourceStatus.lastWebhookError}</p>}{sourceStatus.chats.map(c=><div className="source-row" key={c.id}><strong>{c.name}</strong><span>Зареєстровано алгоритмів: {c.incidents}, активних: {c.active}</span><span>Останнє повідомлення: {date(c.lastMessage?.telegramDateUtc||null)} ({c.lastMessage?.status||'ще немає'})</span><span>Остання оброблена подія з чату: {date(c.lastProcessedLiveAtUtc)}</span>{c.lastMessage?.parseError&&<span>Причина відхилення: {c.lastMessage.parseError}</span>}</div>)}</div>}</details>
       <label>Довідник<select value={formType} onChange={e=>{setFormType(e.target.value);setForm({});setEditId(null)}}>{Object.keys(specs).map(x=><option key={x} value={x}>{labels[x]}</option>)}</select></label>
       <AdminCatalog catalog={catalog} formType={formType} form={form} setForm={setForm} editId={editId} onSubmit={()=>void submit()}
         onEdit={row=>{setEditId(Number(row.id));setForm({...Object.fromEntries(specs[formType].map(([key])=>[key,String(row[key]??'')])),family:formType==='templates'?String(catalog.algorithms.find(x=>x.id===row.algorithmRuleId)?.family??''):''});window.scrollTo({top:0,behavior:'smooth'})}}
         onCancel={()=>{setEditId(null);setForm({})}}
-        onDelete={row=>void removeCatalog(row)}
+        onDelete={requestDelete}
         onRemoveScope={row=>{void (async()=>{try{await api(`/admin/scopes/${row.userId}/${row.objectId}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Доступ прибрано')}catch(e){setNotice(String(e))}})()}} />
       <AdminUsers catalog={catalog} onStatus={(user,status)=>void approve(user,status)} onSave={(user,displayName,role)=>void saveUser(user,displayName,role)} />
       <div className="panel"><h3>Завантажити історію чату за 3 дні</h3><p>У Telegram Desktop відкрийте потрібний чат → «Експортувати історію чату» → формат JSON. Завантажте result.json сюди. Бот обробить лише повідомлення за останні 72 години, а подальші події отримуватиме через webhook.</p><label>Чат<select value={exportChatId} onChange={e=>setExportChatId(e.target.value)} disabled={importing}><option value="">Оберіть чат</option>{catalog.chats.filter(x=>x.enabled).map(x=><option key={String(x.id)} value={String(x.id)}>{String(x.name)}</option>)}</select></label><label>Файл JSON<input type="file" accept=".json,application/json" disabled={importing} onChange={e=>setExportFile(e.target.files?.[0]||null)}/></label><button onClick={()=>void importExport()} disabled={importing} aria-busy={importing}>{importing?<><span className="spinner" aria-hidden="true"/> Імпорт триває…</>:'Завантажити історію'}</button>{importing&&<p className="import-status" role="status" aria-live="polite"><span className="spinner" aria-hidden="true"/> Обробляємо історію чату. Не закривайте вікно; після завершення з’явиться результат імпорту.</p>}</div>
