@@ -118,15 +118,12 @@ public sealed class IncidentService(AlgorithmDbContext db)
 
     private async Task QueueNotificationsAsync(Incident incident, string kind, CancellationToken ct)
     {
-        var applicable = await db.RouteRules.AsNoTracking().Where(x => x.Enabled &&
-            (x.ChatId == null || x.ChatId == incident.ChatId) &&
-            (x.ObjectId == null || x.ObjectId == incident.ObjectId) &&
-            (x.CategoryId == null || x.CategoryId == incident.CategoryId)).ToListAsync(ct);
-        if (applicable.Count == 0) return;
-        var score = applicable.Max(x => (x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1));
-        var bestPriority = applicable.Where(x => ((x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1)) == score).Min(x => x.Priority);
-        var recipients = applicable.Where(x => ((x.ChatId is null ? 0 : 1) + (x.ObjectId is null ? 0 : 1) + (x.CategoryId is null ? 0 : 1)) == score && x.Priority == bestPriority)
-            .Select(x => x.UserId).Distinct().ToArray();
+        // Chats only identify an ingestion source. Every enabled assignment for the
+        // affected object receives the event, regardless of its legacy chat/category fields.
+        var recipients = await db.RouteRules.AsNoTracking()
+            .Where(x => x.Enabled && x.ObjectId == incident.ObjectId)
+            .Select(x => x.UserId).Distinct().ToArrayAsync(ct);
+        if (recipients.Length == 0) return;
         var valid = await db.Users.Where(x => recipients.Contains(x.Id) && x.Status == "approved").Select(x => x.Id).ToListAsync(ct);
         var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
         var obj = await db.Objects.FindAsync([incident.ObjectId], ct);

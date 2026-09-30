@@ -63,6 +63,17 @@ public sealed class AdminValidationFilter : IEndpointFilter
                 break;
             case AlgorithmRule rule:
                 if (!Required(rule.Name, 300) || !Required(rule.MatchPattern, 500)) return "Задайте назву (до 300 символів) та правило розпізнавання (до 500 символів).";
+                if (rule.CategoryId == 0)
+                {
+                    var defaultCategory = await db.Categories.SingleOrDefaultAsync(x => x.Name == "Без категорії", ct);
+                    if (defaultCategory is null)
+                    {
+                        defaultCategory = new ProblemCategory { Name = "Без категорії" };
+                        db.Categories.Add(defaultCategory);
+                        await db.SaveChangesAsync(ct);
+                    }
+                    rule.CategoryId = defaultCategory.Id;
+                }
                 if (!await db.Objects.AnyAsync(x => x.Id == rule.ObjectId, ct) || !await db.Categories.AnyAsync(x => x.Id == rule.CategoryId, ct)) return "Оберіть наявний об’єкт та категорію.";
                 var selected = await db.Objects.FindAsync([rule.ObjectId], ct);
                 if (id != 0)

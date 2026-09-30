@@ -70,6 +70,26 @@ Check(channelUpdate?.ChannelPost?.Chat.Id == -1001 && channelUpdate.ChannelPost.
     "Telegram channel_post updates are decoded");
 Console.WriteLine("ALL DOMAIN TESTS PASSED");
 
+await using (var routingDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("routing-" + Guid.NewGuid()).Options))
+{
+    await DemoSeeder.SeedAsync(routingDb);
+    var alternateChat = new SourceChat { TelegramChatId = -1002, Name = "Інший чат" };
+    var secondOperator = new AppUser { TelegramId = 900003, DisplayName = "Другий оператор", Status = "approved" };
+    var legacyOperator = new AppUser { TelegramId = 900004, DisplayName = "Старе правило", Status = "approved" };
+    routingDb.AddRange(alternateChat, secondOperator, legacyOperator);
+    await routingDb.SaveChangesAsync();
+    var vfsId = await routingDb.Objects.Where(x => x.Code == "ВФС").Select(x => x.Id).SingleAsync();
+    routingDb.RouteRules.AddRange(
+        new RouteRule { UserId = secondOperator.Id, ObjectId = vfsId, ChatId = alternateChat.Id, CategoryId = 999, Priority = 999 },
+        new RouteRule { UserId = legacyOperator.Id, ChatId = (await routingDb.Chats.SingleAsync(x => x.TelegramChatId == -1001)).Id });
+    await routingDb.SaveChangesAsync();
+    Check((await new IncidentService(routingDb).IngestAsync(first)).Status == "Created", "routing fixture creates incident");
+    var notified = await routingDb.NotificationOutbox.Where(x => x.Kind == "problem").Select(x => x.UserId).ToListAsync();
+    Check(notified.Contains(secondOperator.Id) && !notified.Contains(legacyOperator.Id),
+        "object assignments notify regardless of chat, category and priority; chat-only legacy rule is ignored");
+}
+
 await using var discoveryDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("discovery-" + Guid.NewGuid()).Options);
 discoveryDb.Chats.Add(new SourceChat { TelegramChatId = -2001, SenderTelegramId = 77, Name = "РЧВ" });

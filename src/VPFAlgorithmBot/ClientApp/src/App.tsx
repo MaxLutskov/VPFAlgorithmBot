@@ -73,6 +73,14 @@ export default function App(){
     const spec=specs[formType];if(!spec)return
     const body:Record<string,unknown>={}
     try{
+      if(formType==='routes'){
+        const userId=Number(form.userId)
+        const objectIds=(form.objectIds||'').split(',').filter(Boolean).map(Number)
+        if(!userId||objectIds.length===0)throw new Error('Оберіть працівника і хоча б один об’єкт.')
+        await api(`/admin/responsibilities/${userId}`,'PUT',{objectIds})
+        setCatalog(await api<Catalog>('/admin/catalog'));setNotice(`Збережено призначення для ${objectIds.length} об’єктів`)
+        return
+      }
       spec.forEach(([key,type])=>{
         const value=(form[key]??'').trim()
         if(type==='number'){
@@ -91,8 +99,20 @@ export default function App(){
             ? namePattern(String(body.name||'')) : value
         } else {if(!value)throw new Error(`Заповніть поле «${keyLabels[key]||key}».`);body[key]=value}
       })
-      await api('/admin/'+formType+(editId?'/'+editId:''),editId?'PUT':'POST',body);setForm({});setEditId(null);setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Збережено')
+      if(formType==='algorithms'){
+        body.categoryId=editId?catalog?.algorithms.find(x=>Number(x.id)===editId)?.categoryId:catalog?.categories.find(x=>String(x.name)==='Без категорії')?.id??0
+        body.priority=100
+      }
+      if(formType==='templates')body.sortOrder=100
+      await api('/admin/'+formType+(editId?'/'+editId:''),editId?'PUT':'POST',body)
+      setEditId(null);setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Збережено')
     }catch(e){setNotice(String(e))}
+  }
+  async function removeCatalog(row:Record<string,unknown>){
+    const target=formType==='routes'?String(row.userId):String(row.id)
+    if(!window.confirm(formType==='routes'?'Прибрати всі призначення цього працівника?':'Видалити запис із робочого довідника? Історичні дані залишаться.'))return
+    try{await api(formType==='routes'?`/admin/responsibilities/${target}`:`/admin/${formType}/${target}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Запис прибрано з робочого довідника')}
+    catch(e){setNotice(String(e))}
   }
   async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
   async function saveUser(u:Record<string,unknown>,displayName:string,role:string){try{if(!displayName.trim())throw new Error('Введіть службове ім’я.');await api('/admin/users/'+u.id,'PUT',{displayName:displayName.trim(),role,status:u.status});setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Користувача оновлено')}catch(e){setNotice(String(e))}}
@@ -147,11 +167,12 @@ export default function App(){
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
-      <div className="panel"><h3>Прийом повідомлень із чатів</h3><p>Перевірте webhook і останні події кожного чату. Повідомлення Bot_Outlook надходитимуть лише коли для цього бота ввімкнено Bot-to-Bot Communication у BotFather і він має права адміністратора чату або вимкнений Privacy Mode.</p><button onClick={()=>void checkSources()} disabled={sourceStatusBusy}>{sourceStatusBusy?'Перевіряємо…':'Перевірити підключення'}</button>{sourceStatus&&<div className="source-status" role="status"><p>Webhook: <b>{sourceStatus.webhookConfigured?'налаштований':'не налаштований або адреса не збігається'}</b>; {sourceStatus.pendingUpdates===0?'черга доставлення порожня':`очікують доставлення: ${sourceStatus.pendingUpdates}`}</p>{sourceStatus.lastWebhookError&&<p>Остання помилка Telegram ({date(sourceStatus.lastWebhookErrorAtUtc)}): {sourceStatus.lastWebhookError}</p>}{sourceStatus.chats.map(c=><div className="source-row" key={c.id}><strong>{c.name}</strong><span>Зареєстровано алгоритмів: {c.incidents}, активних: {c.active}</span><span>Останнє повідомлення: {date(c.lastMessage?.telegramDateUtc||null)} ({c.lastMessage?.status||'ще немає'})</span><span>Остання оброблена подія з чату: {date(c.lastProcessedLiveAtUtc)}</span>{c.lastMessage?.parseError&&<span>Причина відхилення: {c.lastMessage.parseError}</span>}</div>)}</div>}</div>
+      <details className="panel source-details"><summary>Стан прийому повідомлень із чатів</summary><p>Перевірте webhook і останні події кожного чату. Повідомлення Bot_Outlook надходитимуть лише коли для цього бота ввімкнено Bot-to-Bot Communication у BotFather і він має права адміністратора чату або вимкнений Privacy Mode.</p><button onClick={()=>void checkSources()} disabled={sourceStatusBusy}>{sourceStatusBusy?'Перевіряємо…':'Перевірити підключення'}</button>{sourceStatus&&<div className="source-status" role="status"><p>Webhook: <b>{sourceStatus.webhookConfigured?'налаштований':'не налаштований або адреса не збігається'}</b>; {sourceStatus.pendingUpdates===0?'черга доставлення порожня':`очікують доставлення: ${sourceStatus.pendingUpdates}`}</p>{sourceStatus.lastWebhookError&&<p>Остання помилка Telegram ({date(sourceStatus.lastWebhookErrorAtUtc)}): {sourceStatus.lastWebhookError}</p>}{sourceStatus.chats.map(c=><div className="source-row" key={c.id}><strong>{c.name}</strong><span>Зареєстровано алгоритмів: {c.incidents}, активних: {c.active}</span><span>Останнє повідомлення: {date(c.lastMessage?.telegramDateUtc||null)} ({c.lastMessage?.status||'ще немає'})</span><span>Остання оброблена подія з чату: {date(c.lastProcessedLiveAtUtc)}</span>{c.lastMessage?.parseError&&<span>Причина відхилення: {c.lastMessage.parseError}</span>}</div>)}</div>}</details>
       <label>Довідник<select value={formType} onChange={e=>{setFormType(e.target.value);setForm({});setEditId(null)}}>{Object.keys(specs).map(x=><option key={x} value={x}>{labels[x]}</option>)}</select></label>
       <AdminCatalog catalog={catalog} formType={formType} form={form} setForm={setForm} editId={editId} onSubmit={()=>void submit()}
-        onEdit={row=>{setEditId(Number(row.id));setForm(Object.fromEntries(specs[formType].map(([key])=>[key,String(row[key]??'')])));window.scrollTo({top:0,behavior:'smooth'})}}
+        onEdit={row=>{setEditId(Number(row.id));setForm({...Object.fromEntries(specs[formType].map(([key])=>[key,String(row[key]??'')])),family:formType==='templates'?String(catalog.algorithms.find(x=>x.id===row.algorithmRuleId)?.family??''):''});window.scrollTo({top:0,behavior:'smooth'})}}
         onCancel={()=>{setEditId(null);setForm({})}}
+        onDelete={row=>void removeCatalog(row)}
         onRemoveScope={row=>{void (async()=>{try{await api(`/admin/scopes/${row.userId}/${row.objectId}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Доступ прибрано')}catch(e){setNotice(String(e))}})()}} />
       <AdminUsers catalog={catalog} onStatus={(user,status)=>void approve(user,status)} onSave={(user,displayName,role)=>void saveUser(user,displayName,role)} />
       <div className="panel"><h3>Завантажити історію чату за 3 дні</h3><p>У Telegram Desktop відкрийте потрібний чат → «Експортувати історію чату» → формат JSON. Завантажте result.json сюди. Бот обробить лише повідомлення за останні 72 години, а подальші події отримуватиме через webhook.</p><label>Чат<select value={exportChatId} onChange={e=>setExportChatId(e.target.value)} disabled={importing}><option value="">Оберіть чат</option>{catalog.chats.filter(x=>x.enabled).map(x=><option key={String(x.id)} value={String(x.id)}>{String(x.name)}</option>)}</select></label><label>Файл JSON<input type="file" accept=".json,application/json" disabled={importing} onChange={e=>setExportFile(e.target.files?.[0]||null)}/></label><button onClick={()=>void importExport()} disabled={importing} aria-busy={importing}>{importing?<><span className="spinner" aria-hidden="true"/> Імпорт триває…</>:'Завантажити історію'}</button>{importing&&<p className="import-status" role="status" aria-live="polite"><span className="spinner" aria-hidden="true"/> Обробляємо історію чату. Не закривайте вікно; після завершення з’явиться результат імпорту.</p>}</div>

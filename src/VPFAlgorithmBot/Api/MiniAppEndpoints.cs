@@ -305,6 +305,36 @@ public static class MiniAppEndpoints
             value.UserId=data.UserId;value.Priority=data.Priority;value.Enabled=data.Enabled;
             await db.SaveChangesAsync(ct);return Results.Ok();
         });
+        api.MapPut("/admin/responsibilities/{userId:int}", async (int userId, ResponsibilityEdit data, HttpRequest req,
+            MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            if (!await db.Users.AnyAsync(x => x.Id == userId && x.Status == "approved", ct))
+                return Results.BadRequest("Оберіть підтвердженого працівника.");
+            var objectIds = data.ObjectIds?.Distinct().ToArray() ?? [];
+            if (objectIds.Length == 0 || await db.Objects.CountAsync(x => objectIds.Contains(x.Id) && x.Enabled, ct) != objectIds.Length)
+                return Results.BadRequest("Оберіть хоча б один активний об’єкт.");
+            return await DatabaseWork.RunAsync(db, async () =>
+            {
+                var existing = await db.RouteRules.Where(x => x.UserId == userId).ToListAsync(ct);
+                db.RouteRules.RemoveRange(existing);
+                db.RouteRules.AddRange(objectIds.Select(objectId => new RouteRule { UserId = userId, ObjectId = objectId, Enabled = true }));
+                var scoped = await db.UserScopes.Where(x => x.UserId == userId).Select(x => x.ObjectId).ToListAsync(ct);
+                db.UserScopes.AddRange(objectIds.Except(scoped).Select(objectId => new UserScope { UserId = userId, ObjectId = objectId }));
+                await db.SaveChangesAsync(ct);
+                return Results.Ok();
+            }, ct);
+        });
+        api.MapDelete("/admin/responsibilities/{userId:int}", async (int userId, HttpRequest req,
+            MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var existing = await db.RouteRules.Where(x => x.UserId == userId).ToListAsync(ct);
+            if (existing.Count == 0) return Results.NotFound();
+            db.RouteRules.RemoveRange(existing);
+            await db.SaveChangesAsync(ct);
+            return Results.Ok();
+        });
         api.MapPost("/admin/templates", async (ResponseTemplate data, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
@@ -335,6 +365,47 @@ public static class MiniAppEndpoints
             value.SortOrder = data.SortOrder; value.Enabled = data.Enabled; value.Version++;
             db.TemplateVersions.Add(new TemplateVersion { TemplateId = id, Version = value.Version, Title = value.Title, Text = value.Text, SavedAtUtc = DateTimeOffset.UtcNow });
             await db.SaveChangesAsync(ct); return Results.Ok();
+        });
+        api.MapDelete("/admin/templates/{id:int}", async (int id, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var value = await db.ResponseTemplates.FindAsync([id], ct);
+            if (value is null) return Results.NotFound();
+            // Preserve answer history and version history even when a template is removed from the editor.
+            value.Enabled = false;
+            await db.SaveChangesAsync(ct);
+            return Results.Ok();
+        });
+        api.MapDelete("/admin/algorithms/{id:int}", async (int id, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var value = await db.AlgorithmRules.FindAsync([id], ct);
+            if (value is null) return Results.NotFound();
+            value.Enabled = false;
+            await db.SaveChangesAsync(ct);
+            return Results.Ok();
+        });
+        api.MapDelete("/admin/objects/{id:int}", async (int id, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var value = await db.Objects.FindAsync([id], ct);
+            if (value is null) return Results.NotFound();
+            value.Enabled = false;
+            await db.SaveChangesAsync(ct);
+            return Results.Ok();
+        });
+        api.MapDelete("/admin/chats/{id:int}", async (int id, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var value = await db.Chats.FindAsync([id], ct);
+            if (value is null) return Results.NotFound();
+            value.Enabled = false;
+            await db.SaveChangesAsync(ct);
+            return Results.Ok();
         });
         api.MapPut("/admin/users/{id:int}", async (int id, UserEdit data, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
@@ -402,4 +473,5 @@ public static class MiniAppEndpoints
     private sealed record DemoResponse(long IncidentId, long TelegramUserId, int? TemplateId, string? Text);
     private sealed record ResponseEdit(int? TemplateId, string? Text, string? RequestId);
     private sealed record ReminderEdit(int Minutes);
+    private sealed record ResponsibilityEdit(int[]? ObjectIds);
 }
