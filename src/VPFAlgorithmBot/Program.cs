@@ -70,6 +70,7 @@ await using (var scope = app.Services.CreateAsyncScope())
         await db.Database.MigrateAsync();
     }
     await HistoricalSeed.SeedAsync(db, builder.Configuration["HistoryImport:GzipBase64"]);
+    await SharedAlgorithmUpgrade.ApplyAsync(db);
 }
 app.Run();
 public partial class Program;

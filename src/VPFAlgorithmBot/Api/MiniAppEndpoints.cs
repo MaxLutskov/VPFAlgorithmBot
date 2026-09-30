@@ -34,9 +34,14 @@ public static class MiniAppEndpoints
             var user=await auth.GetUserAsync(req,db,ct);if(user is null)return Results.Unauthorized();
             var ids=user.Role=="admin" ? await db.Objects.Select(x=>x.Id).ToListAsync(ct)
                 : await db.UserScopes.Where(x=>x.UserId==user.Id).Select(x=>x.ObjectId).ToListAsync(ct);
+            var objects = await db.Objects.AsNoTracking().ToListAsync(ct);
+            var families = objects.Where(x => ids.Contains(x.Id)).Select(x => AlgorithmCatalog.Family(x.Code)).ToHashSet();
+            var rules = await db.AlgorithmRules.AsNoTracking().ToListAsync(ct);
+            var canonical = AlgorithmCatalog.CanonicalIds(rules, objects);
             return Results.Ok(new {
-                Objects=await db.Objects.Where(x=>ids.Contains(x.Id)).Select(x=>new{x.Id,x.Name,x.Code}).ToListAsync(ct),
-                Algorithms=await db.AlgorithmRules.Where(x=>ids.Contains(x.ObjectId)).Select(x=>new{x.Id,x.Name}).ToListAsync(ct)
+                Objects=objects.Where(x=>ids.Contains(x.Id)).Select(x=>new{x.Id,x.Name,x.Code}).ToList(),
+                Algorithms=rules.Where(x=>canonical[x.Id]==x.Id && families.Contains(AlgorithmCatalog.Family(objects.First(o=>o.Id==x.ObjectId).Code)))
+                    .Select(x=>new{x.Id,x.Name}).ToList()
             });
         });
         api.MapGet("/incidents", async (HttpRequest req, MiniAppAuth auth, AlgorithmDbContext db, string? state, string? answer,
@@ -90,14 +95,21 @@ public static class MiniAppEndpoints
         api.MapGet("/admin/catalog", async (HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var objects = await db.Objects.AsNoTracking().ToListAsync(ct);
+            var rules = await db.AlgorithmRules.AsNoTracking().ToListAsync(ct);
+            var canonical = AlgorithmCatalog.CanonicalIds(rules, objects);
+            var canonicalIds = canonical.Values.Distinct().ToArray();
             return Results.Ok(new
             {
                 Chats = await db.Chats.OrderBy(x => x.Id).ToListAsync(ct),
-                Objects = await db.Objects.OrderBy(x => x.Code).ToListAsync(ct),
+                Objects = objects.OrderBy(x => x.Code).ToList(),
                 Categories = await db.Categories.OrderBy(x => x.Name).ToListAsync(ct),
-                Algorithms = await db.AlgorithmRules.OrderBy(x => x.Priority).ToListAsync(ct),
+                Algorithms = rules.Where(x => canonical[x.Id] == x.Id).OrderBy(x => AlgorithmCatalog.Family(objects.First(o => o.Id == x.ObjectId).Code))
+                    .ThenBy(x => x.Name).Select(x => new { x.Id, x.ObjectId, x.CategoryId, x.Name, x.MatchPattern, x.Priority, x.Enabled,
+                        Family = AlgorithmCatalog.Family(objects.First(o => o.Id == x.ObjectId).Code) }).ToList(),
                 Routes = await db.RouteRules.OrderBy(x => x.Priority).ToListAsync(ct),
-                Templates = await db.ResponseTemplates.OrderBy(x => x.SortOrder).ToListAsync(ct),
+                Templates = await db.ResponseTemplates.Where(x => x.AlgorithmRuleId != null && canonicalIds.Contains(x.AlgorithmRuleId.Value))
+                    .OrderBy(x => x.SortOrder).ToListAsync(ct),
                 TemplateVersions = await db.TemplateVersions.OrderByDescending(x => x.SavedAtUtc).Take(100).ToListAsync(ct),
                 Users = await db.Users.OrderBy(x => x.Id).ToListAsync(ct),
                 Scopes = await db.UserScopes.ToListAsync(ct),
@@ -175,8 +187,18 @@ public static class MiniAppEndpoints
             try { _ = new Regex(data.MatchPattern,RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(100)); }
             catch(ArgumentException){return Results.BadRequest("Некоректне правило");}
             var value=await db.AlgorithmRules.FindAsync([id],ct);if(value is null)return Results.NotFound();
+            var canonical = await AlgorithmCatalog.CanonicalIdsAsync(db, ct);
+            if (!canonical.TryGetValue(id, out var canonicalId) || canonicalId != id)
+                return Results.BadRequest("Редагуйте спільний тип алгоритму.");
+            var aliases = await db.AlgorithmRules.Where(x => x.Id != id && x.Name == value.Name).ToListAsync(ct);
+            var relatedAliasIds = aliases.Where(x => canonical.TryGetValue(x.Id, out var groupId) && groupId == id).Select(x => x.Id).ToHashSet();
             value.ObjectId=data.ObjectId;value.CategoryId=data.CategoryId;value.Name=data.Name.Trim();
             value.MatchPattern=data.MatchPattern;value.Priority=data.Priority;value.Enabled=data.Enabled;
+            foreach (var alias in aliases.Where(x => relatedAliasIds.Contains(x.Id)))
+            {
+                alias.CategoryId = value.CategoryId; alias.Name = value.Name;
+                alias.MatchPattern = value.MatchPattern; alias.Priority = value.Priority; alias.Enabled = false;
+            }
             await db.SaveChangesAsync(ct);return Results.Ok();
         });
         api.MapPost("/admin/routes", async (RouteRule data, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
@@ -202,7 +224,7 @@ public static class MiniAppEndpoints
             var rule = await db.AlgorithmRules.FindAsync([data.AlgorithmRuleId.Value], ct);
             if (rule is null) return Results.BadRequest("Алгоритм не знайдено.");
             var value = new ResponseTemplate { Title = data.Title.Trim(), Text = data.Text.Trim(), AlgorithmRuleId = rule.Id,
-                ObjectId = rule.ObjectId, CategoryId = rule.CategoryId, SortOrder = data.SortOrder, Enabled = data.Enabled };
+                CategoryId = rule.CategoryId, SortOrder = data.SortOrder, Enabled = data.Enabled };
             db.ResponseTemplates.Add(value);
             await db.SaveChangesAsync(ct);
             db.TemplateVersions.Add(new TemplateVersion { TemplateId = value.Id, Version = 1, Title = value.Title, Text = value.Text, SavedAtUtc = DateTimeOffset.UtcNow });
@@ -220,7 +242,7 @@ public static class MiniAppEndpoints
             if (value.AlgorithmRuleId is not null && value.AlgorithmRuleId != rule.Id)
                 return Results.BadRequest("Для іншого алгоритму створіть окремий шаблон.");
             value.Title = data.Title.Trim(); value.Text = data.Text.Trim(); value.AlgorithmRuleId = rule.Id;
-            value.ObjectId = rule.ObjectId; value.CategoryId = rule.CategoryId;
+            value.ObjectId = null; value.CategoryId = rule.CategoryId;
             value.SortOrder = data.SortOrder; value.Enabled = data.Enabled; value.Version++;
             db.TemplateVersions.Add(new TemplateVersion { TemplateId = id, Version = value.Version, Title = value.Title, Text = value.Text, SavedAtUtc = DateTimeOffset.UtcNow });
             await db.SaveChangesAsync(ct); return Results.Ok();
@@ -254,7 +276,7 @@ public static class MiniAppEndpoints
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
             try
             {
-                var rule = EventParser.MatchRule(await db.AlgorithmRules.AsNoTracking().ToListAsync(ct), data.Text);
+                var rule = await AlgorithmCatalog.MatchExistingAsync(db, data.Text, ct);
                 return Results.Ok(new { rule.Id, rule.Name, Time = EventParser.ParseTime(data.TelegramDateUtc, data.Text) });
             }
             catch (Exception ex) when (ex is FormatException or RegexMatchTimeoutException) { return Results.BadRequest(ex.Message); }

@@ -25,11 +25,11 @@ function Send-Json($path, $method, $body) {
 function Catalog { Invoke-RestMethod -Uri "$base/admin/catalog" -Headers $headers }
 
 Send-Json '/admin/chats' 'POST' @{telegramChatId=-1099;senderTelegramId=99;name='Тестовий чат';enabled=$true} | Out-Null
-Send-Json '/admin/objects' 'POST' @{code='TEST';name='Тестовий обект';enabled=$true} | Out-Null
+Send-Json '/admin/objects' 'POST' @{code='ТЕСТ';name='Тестовий обект';enabled=$true} | Out-Null
 Send-Json '/admin/categories' 'POST' @{name='Тестова категорія';enabled=$true} | Out-Null
 $catalog = Catalog
 $chat = $catalog.chats | Where-Object telegramChatId -eq -1099
-$object = $catalog.objects | Where-Object code -eq 'TEST'
+$object = $catalog.objects | Where-Object code -eq 'ТЕСТ'
 $category = $catalog.categories | Where-Object name -eq 'Тестова категорія'
 if (!$chat -or !$object -or !$category) { throw 'Catalog creation failed' }
 
@@ -79,7 +79,7 @@ function Expect-BadRequest($path, $body) {
 }
 Expect-BadRequest '/admin/chats' @{telegramChatId=-1099;name='Duplicate'}
 Expect-BadRequest '/admin/chats' @{telegramChatId=0;name='Zero'}
-Expect-BadRequest '/admin/objects' @{code='TEST';name='Duplicate'}
+Expect-BadRequest '/admin/objects' @{code='ТЕСТ';name='Duplicate'}
 Expect-BadRequest '/admin/objects' @{code='';name='Empty code'}
 Expect-BadRequest '/admin/categories' @{name='Тестова категорія'}
 Expect-BadRequest '/admin/algorithms' @{objectId=999999;categoryId=$category.id;name='Missing object';matchPattern='x'}

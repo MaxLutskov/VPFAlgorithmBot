@@ -35,11 +35,14 @@ public sealed class IncidentService(AlgorithmDbContext db)
             return new("Ignored", Reason: "Немає маркера");
         }
         AlgorithmRule rule;
+        MonitoredObject obj;
         DateTimeOffset occurred;
         try
         {
             occurred = EventParser.ParseTime(input.TelegramDateUtc, input.Text);
             rule = await AlgorithmCatalog.ResolveAsync(db, input.Text, ct);
+            var description = EventParser.Describe(input.Text);
+            obj = await db.Objects.SingleAsync(x => x.Code == description.ObjectCode, ct);
         }
         catch (Exception ex) when (ex is FormatException or System.Text.RegularExpressions.RegexMatchTimeoutException or ArgumentException)
         {
@@ -54,7 +57,7 @@ public sealed class IncidentService(AlgorithmDbContext db)
         await db.SaveChangesAsync(ct);
         if (kind == "problem")
         {
-            if (await db.Incidents.AnyAsync(x => x.ChatId == chat.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null, ct))
+            if (await db.Incidents.AnyAsync(x => x.ChatId == chat.Id && x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null, ct))
             {
                 message.Status = "review";
                 message.ParseError = "Повторне червоне повідомлення для відкритого алгоритму";
@@ -63,7 +66,7 @@ public sealed class IncidentService(AlgorithmDbContext db)
             }
             var incident = new Incident
             {
-                ChatId = chat.Id, ObjectId = rule.ObjectId, CategoryId = rule.CategoryId,
+                ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
                 AlgorithmRuleId = rule.Id, StartedAtUtc = occurred, StartMessageId = message.Id
             };
             db.Incidents.Add(incident);
@@ -74,7 +77,7 @@ public sealed class IncidentService(AlgorithmDbContext db)
             await db.SaveChangesAsync(ct);
             return new("Created", incident.Id);
         }
-        var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
+        var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
         if (candidates.Count != 1 || occurred < candidates[0].StartedAtUtc)
         {
             message.Status = "review";

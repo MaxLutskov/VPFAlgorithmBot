@@ -46,6 +46,13 @@ public sealed class AdminValidationFilter : IEndpointFilter
             case MonitoredObject obj:
                 if (!Required(obj.Code, 50) || !Required(obj.Name, 200)) return "Задайте код (до 50 символів) та назву об’єкта (до 200 символів).";
                 obj.Code = EventParser.NormalizeObjectCode(obj.Code);
+                if (id != 0)
+                {
+                    var oldObject = await db.Objects.FindAsync([id], ct);
+                    if (oldObject is not null && AlgorithmCatalog.Family(oldObject.Code) != AlgorithmCatalog.Family(obj.Code) &&
+                        (await db.AlgorithmRules.AnyAsync(x => x.ObjectId == id, ct) || await db.Incidents.AnyAsync(x => x.ObjectId == id, ct)))
+                        return "Об’єкт з історією не можна переносити до іншої групи. Змініть назву або створіть новий об’єкт.";
+                }
                 var codes = await db.Objects.Where(x => x.Id != id).Select(x => x.Code).ToListAsync(ct);
                 if (codes.Any(x => EventParser.NormalizeObjectCode(x) == obj.Code)) return "Об’єкт із таким кодом уже існує.";
                 break;
@@ -57,9 +64,24 @@ public sealed class AdminValidationFilter : IEndpointFilter
             case AlgorithmRule rule:
                 if (!Required(rule.Name, 300) || !Required(rule.MatchPattern, 500)) return "Задайте назву (до 300 символів) та правило розпізнавання (до 500 символів).";
                 if (!await db.Objects.AnyAsync(x => x.Id == rule.ObjectId, ct) || !await db.Categories.AnyAsync(x => x.Id == rule.CategoryId, ct)) return "Оберіть наявний об’єкт та категорію.";
+                var selected = await db.Objects.FindAsync([rule.ObjectId], ct);
+                if (id != 0)
+                {
+                    var existing = await db.AlgorithmRules.FindAsync([id], ct);
+                    var existingObject = existing is null ? null : await db.Objects.FindAsync([existing.ObjectId], ct);
+                    if (existingObject is not null && existing!.ObjectId != rule.ObjectId)
+                        return "Групу алгоритму після створення не змінюють. Створіть окремий тип.";
+                }
                 try { _ = new Regex(rule.MatchPattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)); }
                 catch (ArgumentException) { return "Некоректне правило розпізнавання."; }
-                if (await db.AlgorithmRules.AnyAsync(x => x.Id != id && x.ObjectId == rule.ObjectId && x.MatchPattern == rule.MatchPattern, ct)) return "Таке правило для цього об’єкта вже існує.";
+                var allRules = await db.AlgorithmRules.ToListAsync(ct);
+                var allObjects = await db.Objects.ToListAsync(ct);
+                var canonicalRules = AlgorithmCatalog.CanonicalIds(allRules, allObjects);
+                var family = AlgorithmCatalog.Family(selected!.Code);
+                if (allRules.Any(x => x.Id != id && canonicalRules[x.Id] == x.Id &&
+                    AlgorithmCatalog.Family(allObjects.First(o => o.Id == x.ObjectId).Code) == family &&
+                    (AlgorithmCatalog.RuleName(x.Name).Equals(AlgorithmCatalog.RuleName(rule.Name), StringComparison.OrdinalIgnoreCase) ||
+                     x.MatchPattern == rule.MatchPattern))) return "Такий алгоритм у цій групі вже існує.";
                 break;
             case RouteRule route:
                 if (!await db.Users.AnyAsync(x => x.Id == route.UserId, ct)) return "Оберіть наявного користувача.";
@@ -70,6 +92,9 @@ public sealed class AdminValidationFilter : IEndpointFilter
             case ResponseTemplate template:
                 if (!Required(template.Title, 200) || !Required(template.Text, 2000)) return "Задайте назву (до 200 символів) та текст відповіді (до 2000 символів).";
                 if (template.AlgorithmRuleId is null || !await db.AlgorithmRules.AnyAsync(x => x.Id == template.AlgorithmRuleId, ct)) return "Оберіть наявний алгоритм.";
+                var map = await AlgorithmCatalog.CanonicalIdsAsync(db, ct);
+                if (!map.TryGetValue(template.AlgorithmRuleId.Value, out var canonicalId) || canonicalId != template.AlgorithmRuleId.Value)
+                    return "Оберіть спільний тип алгоритму з довідника.";
                 break;
             case UserScope scope:
                 if (!await db.Users.AnyAsync(x => x.Id == scope.UserId, ct) || !await db.Objects.AnyAsync(x => x.Id == scope.ObjectId, ct)) return "Оберіть наявного користувача та об’єкт.";

@@ -57,7 +57,7 @@ public static class HistoricalSeed
             }
             var ruleCache = new Dictionary<string, AlgorithmRule>();
             var imported = new List<Incident>();
-            var open = new Dictionary<(int Chat, int Rule), Incident>();
+            var open = new Dictionary<(int Chat, int Object, int Rule), Incident>();
             foreach (var item in parsed)
             {
                 var description = EventParser.Describe(item.Row.Text);
@@ -67,6 +67,7 @@ public static class HistoricalSeed
                     ruleCache.Add(description.MatchText, rule);
                 }
                 var chat = chats[item.Row.Source];
+                var obj = await db.Objects.SingleAsync(x => x.Code == description.ObjectCode, ct);
                 var message = new IncomingMessage
                 {
                     ChatId = chat.Id, TelegramMessageId = -(item.Index + 1),
@@ -75,14 +76,14 @@ public static class HistoricalSeed
                 };
                 db.IncomingMessages.Add(message);
                 await db.SaveChangesAsync(ct);
-                var key = (chat.Id, rule.Id);
+                var key = (chat.Id, obj.Id, rule.Id);
                 Incident incident;
                 if (EventParser.Kind(item.Row.Text) == "problem")
                 {
                     if (open.ContainsKey(key)) throw new FormatException("Повторний початок в історичному імпорті.");
                     incident = new Incident
                     {
-                        ChatId = chat.Id, ObjectId = rule.ObjectId, CategoryId = rule.CategoryId,
+                        ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
                         AlgorithmRuleId = rule.Id, StartedAtUtc = item.Occurred,
                         StartMessageId = message.Id, Quality = "historical_missing_end"
                     };
@@ -105,7 +106,7 @@ public static class HistoricalSeed
                         if (duration is null) throw new FormatException("Завершення без початку та тривалості в історії.");
                         incident = new Incident
                         {
-                            ChatId = chat.Id, ObjectId = rule.ObjectId, CategoryId = rule.CategoryId,
+                            ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
                             AlgorithmRuleId = rule.Id, StartedAtUtc = item.Occurred - duration.Value,
                             StartMessageId = message.Id, Quality = "historical_inferred_start"
                         };
@@ -121,7 +122,9 @@ public static class HistoricalSeed
             }
             // Seed only empty template sets; never restore deleted choices or overwrite edited text
             // on later app deployments (the import marker and this data commit atomically).
-            foreach (var rule in await db.AlgorithmRules.ToListAsync(ct))
+            var canonical = await AlgorithmCatalog.CanonicalIdsAsync(db, ct);
+            var canonicalIds = canonical.Values.Distinct().ToArray();
+            foreach (var rule in await db.AlgorithmRules.Where(x => canonicalIds.Contains(x.Id)).ToListAsync(ct))
                 await AlgorithmCatalog.AddTestTemplatesAsync(db, rule, ct);
             var summary = new ImportSummary(rows.Count, imported.Count, imported.Count(x => x.EndedAtUtc != null),
                 imported.Count(x => x.Quality == "historical_inferred_start"), open.Count);

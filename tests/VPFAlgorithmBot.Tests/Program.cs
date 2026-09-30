@@ -112,7 +112,7 @@ if (!productionFixture)
 }
 var expectedMessages = productionFixture ? 104 : 4;
 var expectedIncidents = productionFixture ? 57 : 3;
-var expectedRules = productionFixture ? 36 : 3;
+var expectedRules = productionFixture ? 26 : 3;
 await HistoricalSeed.SeedAsync(historyDb, historyPayload);
 Check(await historyDb.IncomingMessages.CountAsync() == expectedMessages && await historyDb.Incidents.CountAsync() == expectedIncidents, $"historical import: {expectedMessages} messages, {expectedIncidents} incidents");
 Check(await historyDb.Objects.CountAsync() == (productionFixture ? 14 : 2) && await historyDb.AlgorithmRules.CountAsync() == expectedRules, "historical catalog has expected object and rule counts");
@@ -130,3 +130,56 @@ await historyDb.SaveChangesAsync();
 await HistoricalSeed.SeedAsync(historyDb, historyPayload);
 Check(await historyDb.Incidents.CountAsync() == expectedIncidents && await historyDb.IncomingMessages.CountAsync() == expectedMessages && await historyDb.ResponseTemplates.CountAsync() == expectedRules * 4 && changedTemplate.Text == "Адміністратор змінив відповідь" && !changedTemplate.Enabled, "redeployment is idempotent and preserves edited templates");
 Console.WriteLine("ALL DISCOVERY AND HISTORY TESTS PASSED");
+
+await using var sharedDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("shared-" + Guid.NewGuid()).Options);
+var sharedChat = new SourceChat { TelegramChatId = -3300, SenderTelegramId = 77, Name = "Алгоритми РЧВ" };
+var rchv7 = new MonitoredObject { Code = "РЧВ7", Name = "РЧВ 7" };
+var rchv2 = new MonitoredObject { Code = "РЧВ2", Name = "РЧВ 2" };
+var sharedCategory = new ProblemCategory { Name = "Тиск" };
+sharedDb.AddRange(sharedChat, rchv7, rchv2, sharedCategory);
+await sharedDb.SaveChangesAsync();
+var old7 = new AlgorithmRule { ObjectId = rchv7.Id, CategoryId = sharedCategory.Id, Name = "Високий тиск протягом 30 хв", MatchPattern = @"РЧВ7:\s*Високий тиск" };
+var old2 = new AlgorithmRule { ObjectId = rchv2.Id, CategoryId = sharedCategory.Id, Name = "Високий тиск протягом 30 хв", MatchPattern = @"РЧВ2:\s*Високий тиск" };
+sharedDb.AlgorithmRules.AddRange(old7, old2);
+await sharedDb.SaveChangesAsync();
+var oldTemplate7 = new ResponseTemplate { AlgorithmRuleId = old7.Id, ObjectId = rchv7.Id, Title = "Показники перевірено", Text = "Старий текст", Version = 1 };
+var oldTemplate2 = new ResponseTemplate { AlgorithmRuleId = old2.Id, ObjectId = rchv2.Id, Title = "Показники перевірено", Text = "Уточнений текст для спільного типу", Version = 3 };
+sharedDb.ResponseTemplates.AddRange(oldTemplate7, oldTemplate2);
+await sharedDb.SaveChangesAsync();
+var started7 = new IncomingMessage { ChatId = sharedChat.Id, TelegramMessageId = 1, Text = "історія" };
+var started2 = new IncomingMessage { ChatId = sharedChat.Id, TelegramMessageId = 2, Text = "історія" };
+sharedDb.IncomingMessages.AddRange(started7, started2);
+await sharedDb.SaveChangesAsync();
+var legacyIncident7 = new Incident { ChatId = sharedChat.Id, ObjectId = rchv7.Id, CategoryId = sharedCategory.Id, AlgorithmRuleId = old7.Id, StartMessageId = started7.Id, StartedAtUtc = started };
+var legacyIncident2 = new Incident { ChatId = sharedChat.Id, ObjectId = rchv2.Id, CategoryId = sharedCategory.Id, AlgorithmRuleId = old2.Id, StartMessageId = started2.Id, StartedAtUtc = started };
+sharedDb.Incidents.AddRange(legacyIncident7, legacyIncident2);
+await sharedDb.SaveChangesAsync();
+sharedDb.Responses.Add(new IncidentResponse { IncidentId = legacyIncident7.Id, UserId = 2, TemplateId = oldTemplate7.Id, TemplateVersion = 1, Text = "Відповідь з історії", CreatedAtUtc = started });
+await sharedDb.SaveChangesAsync();
+Check(await SharedAlgorithmUpgrade.ApplyAsync(sharedDb) == 1, "legacy RCHV types are consolidated once");
+Check(await SharedAlgorithmUpgrade.ApplyAsync(sharedDb) == 0, "shared catalog upgrade is idempotent");
+Check(legacyIncident7.AlgorithmRuleId == legacyIncident2.AlgorithmRuleId && legacyIncident7.ObjectId != legacyIncident2.ObjectId,
+    "historical incidents use one type while preserving each site");
+Check(await sharedDb.Responses.CountAsync(x => x.TemplateId == oldTemplate7.Id) == 1 && oldTemplate7.Id != oldTemplate2.Id,
+    "historical answers retain their original template references");
+Check(oldTemplate2.AlgorithmRuleId == legacyIncident7.AlgorithmRuleId && oldTemplate2.Enabled && !oldTemplate7.Enabled && oldTemplate2.ObjectId == null,
+    "most recently edited answer becomes the shared choice without losing old versions");
+Check(AlgorithmCatalog.CanonicalIds(await sharedDb.AlgorithmRules.ToListAsync(), await sharedDb.Objects.ToListAsync()).Values.Distinct().Count() == 1,
+    "admin catalog presents one RCHV algorithm type");
+old7.Enabled = false;
+await sharedDb.SaveChangesAsync();
+Check(AlgorithmCatalog.CanonicalIds(await sharedDb.AlgorithmRules.ToListAsync(), await sharedDb.Objects.ToListAsync())[old2.Id] == old7.Id,
+    "disabling a shared type never promotes a legacy alias");
+old7.Enabled = true;
+await sharedDb.SaveChangesAsync();
+var sharedService = new IncidentService(sharedDb);
+var newFor7 = await sharedService.IngestAsync(new InboundEvent(-3300, 77, 11, started.AddHours(1), "🔴 08:02:57 РЧВ 7: Новий спільний алгоритм"));
+var newFor2 = await sharedService.IngestAsync(new InboundEvent(-3300, 77, 12, started.AddHours(1), "🔴 08:02:57 РЧВ 2: Новий спільний алгоритм"));
+Check(newFor7.Status == "Created" && newFor2.Status == "Created" &&
+    (await sharedDb.Incidents.FindAsync(newFor7.IncidentId))!.AlgorithmRuleId == (await sharedDb.Incidents.FindAsync(newFor2.IncidentId))!.AlgorithmRuleId,
+    "two RCHV sites can open the same algorithm independently in one chat");
+Check((await sharedService.IngestAsync(new InboundEvent(-3300, 77, 13, started.AddHours(2), "🟢 09:02:57 РЧВ 2: Новий спільний алгоритм Тривалість: 1h 0m 0s"))).Status == "Resolved" &&
+    (await sharedDb.Incidents.FindAsync(newFor7.IncidentId))!.EndedAtUtc is null,
+    "recovery for RCHV 2 does not close RCHV 7");
+Console.WriteLine("ALL SHARED ALGORITHM TESTS PASSED");

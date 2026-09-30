@@ -52,7 +52,7 @@ public static partial class EventParser
     {
         bool IsMatch(string candidate) => Regex.IsMatch(candidate, rule.MatchPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
         if (IsMatch(text) || IsMatch(NormalizeText(text))) return true;
-        try { return IsMatch(Describe(text).MatchText); }
+        try { var description = Describe(text); return IsMatch(description.MatchText) || IsMatch(description.Name); }
         catch (FormatException) { return false; }
     }
 
