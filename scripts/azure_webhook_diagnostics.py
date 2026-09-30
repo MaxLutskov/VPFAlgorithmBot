@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     errors = collections.Counter()
     frames = collections.Counter()
+    http_statuses = collections.Counter()
     with zipfile.ZipFile(archive) as logs:
         files = [name for name in logs.namelist() if name.lower().endswith((".log", ".txt"))]
         print("Log files inspected:", len(files))
@@ -31,7 +32,10 @@ with tempfile.TemporaryDirectory() as directory:
                     if "Exception" in line or "Error" in line:
                         for kind in re.findall(r"\b(?:System|Microsoft|VPFAlgorithmBot)\.[A-Za-z0-9_.]+(?:Exception|Error)\b", line):
                             errors[kind] += 1
+                    for status in re.findall(r"Response status code does not indicate success: (\d{3})", line):
+                        http_statuses[status] += 1
                     for method in re.findall(r"\bat (VPFAlgorithmBot\.[A-Za-z0-9_.+<>]+)\(", line):
                         frames[method] += 1
     print("Exception classes:", errors.most_common(20))
+    print("Outbound HTTP status codes:", http_statuses.most_common())
     print("Project stack frames:", frames.most_common(20))
