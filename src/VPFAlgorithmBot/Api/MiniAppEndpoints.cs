@@ -173,6 +173,8 @@ public static class MiniAppEndpoints
                 WebhookConfigured = webhookReady,
                 PendingUpdates = webhook.TryGetProperty("pending_update_count", out var pending) ? pending.GetInt32() : 0,
                 LastWebhookError = webhook.TryGetProperty("last_error_message", out var error) ? error.GetString() : null,
+                LastWebhookErrorAtUtc = webhook.TryGetProperty("last_error_date", out var errorDate)
+                    ? DateTimeOffset.FromUnixTimeSeconds(errorDate.GetInt64()) : (DateTimeOffset?)null,
                 Chats = status
             });
         });
