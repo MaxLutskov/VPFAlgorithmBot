@@ -1,0 +1,22 @@
+name: Diagnose Telegram webhook errors
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_46BD1E48310D4385AFA7800F9C7DBC98 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_8C1600560E3C4748AA7BF24AE62FC3B7 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_6903D4EE33B04AD8A7EDC99A95A38BEA }}
+      - name: Summarize webhook exceptions without message text or secrets
+        run: python3 scripts/azure_webhook_diagnostics.py
