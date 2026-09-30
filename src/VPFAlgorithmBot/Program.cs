@@ -63,14 +63,14 @@ await using (var scope = app.Services.CreateAsyncScope())
     if (mode == "Demo")
     {
         await db.Database.EnsureCreatedAsync();
-        await DemoSeeder.SeedAsync(db);
+        if (builder.Configuration.GetValue<bool>("Demo:SeedSampleData")) await DemoSeeder.SeedAsync(db);
     }
     else
     {
         await db.Database.MigrateAsync();
     }
-    await HistoricalSeed.SeedAsync(db, builder.Configuration["HistoryImport:GzipBase64"]);
     await SharedAlgorithmUpgrade.ApplyAsync(db);
+    await LegacyArchiveCleanup.ApplyAsync(db);
 }
 app.Run();
 public partial class Program;

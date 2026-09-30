@@ -130,6 +130,42 @@ await historyDb.SaveChangesAsync();
 await HistoricalSeed.SeedAsync(historyDb, historyPayload);
 Check(await historyDb.Incidents.CountAsync() == expectedIncidents && await historyDb.IncomingMessages.CountAsync() == expectedMessages && await historyDb.ResponseTemplates.CountAsync() == expectedRules * 4 && changedTemplate.Text == "Адміністратор змінив відповідь" && !changedTemplate.Enabled, "redeployment is idempotent and preserves edited templates");
 Console.WriteLine("ALL DISCOVERY AND HISTORY TESTS PASSED");
+Check(await LegacyArchiveCleanup.ApplyAsync(historyDb) == expectedIncidents &&
+    !await historyDb.Incidents.AnyAsync() && !await historyDb.IncomingMessages.AnyAsync() && !await historyDb.Chats.AnyAsync(),
+    "legacy archive incidents, messages and chats are removed");
+Check(await LegacyArchiveCleanup.ApplyAsync(historyDb) == 0 && changedTemplate.Text == "Адміністратор змінив відповідь" &&
+    await historyDb.AlgorithmRules.CountAsync() == expectedRules,
+    "archive cleanup is idempotent and preserves the edited algorithm catalog");
+
+await using var exportDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("export-" + Guid.NewGuid()).Options);
+await DemoSeeder.SeedAsync(exportDb);
+var exportService = new IncidentService(exportDb);
+var exportChat = await exportDb.Chats.SingleAsync();
+var exportNow = new DateTimeOffset(2026, 9, 30, 12, 0, 0, TimeSpan.Zero);
+var exportMessages = new
+{
+    name = "Алгоритми ВФС",
+    messages = new object[]
+    {
+        new { id = 900, type = "message", date_unixtime = exportNow.AddDays(-4).ToUnixTimeSeconds().ToString(), from_id = "user77", text = (object)"🔴 10:00:00 ВФС: Застарілий запис" },
+        new { id = 901, type = "message", date_unixtime = new DateTimeOffset(2026, 9, 29, 7, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds().ToString(), from_id = "user77", text = (object)new object[] { "🔴 10:00:00 ВФС: ", new { type = "bold", text = "Тест імпорту" } } },
+        new { id = 902, type = "message", date_unixtime = new DateTimeOffset(2026, 9, 29, 7, 15, 0, TimeSpan.Zero).ToUnixTimeSeconds().ToString(), from_id = "user77", text = (object)"🟢 10:15:00 ВФС: Тест імпорту Тривалість: 15m 0s" },
+        new { id = 903, type = "message", date_unixtime = new DateTimeOffset(2026, 9, 29, 8, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds().ToString(), from_id = "user999", text = (object)"🔴 11:00:00 ВФС: Чужий відправник" },
+        new { id = 904, type = "message", date_unixtime = new DateTimeOffset(2026, 9, 29, 9, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds().ToString(), from_id = "user77", text = (object)"🟢 12:00:00 ВФС: Самовідновлення Тривалість: 30m 0s" }
+    }
+};
+using var exportJson = new MemoryStream(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(exportMessages));
+var exportResult = await TelegramDesktopImport.ImportAsync(exportJson, exportChat, exportService, exportNow);
+Check(exportResult.EligibleMessages == 3 && exportResult.ImportedMessages == 3 &&
+    await exportDb.Incidents.CountAsync() == 2 && await exportDb.NotificationOutbox.CountAsync() == 0,
+    "Telegram Desktop export imports only last 72 hours and sends no old notifications");
+Check(await exportDb.Incidents.AnyAsync(x => x.Quality == "export_complete") &&
+    await exportDb.Incidents.AnyAsync(x => x.Quality == "export_inferred_start"),
+    "exported red/green messages pair and green-only duration restores the start");
+exportJson.Position = 0;
+var repeatedExport = await TelegramDesktopImport.ImportAsync(exportJson, exportChat, exportService, exportNow);
+Check(repeatedExport.Duplicates == 3 && await exportDb.Incidents.CountAsync() == 2, "repeated export does not duplicate incidents");
 
 await using var sharedDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("shared-" + Guid.NewGuid()).Options);

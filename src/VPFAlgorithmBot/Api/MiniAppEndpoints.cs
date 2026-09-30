@@ -119,6 +119,36 @@ public static class MiniAppEndpoints
                 ,Audit = await db.AuditEvents.OrderByDescending(x => x.Id).Take(100).ToListAsync(ct)
             });
         });
+        api.MapPost("/admin/import-export/{chatId:int}", async (int chatId, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, IncidentService incidents, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var chat = await db.Chats.AsNoTracking().SingleOrDefaultAsync(x => x.Id == chatId && x.Enabled, ct);
+            if (chat is null) return Results.BadRequest("Оберіть активний чат із довідника.");
+            if (!req.HasFormContentType) return Results.BadRequest("Надішліть файл result.json.");
+            var form = await req.ReadFormAsync(ct);
+            var file = form.Files.GetFile("file");
+            if (file is null || file.Length == 0 || file.Length > 20 * 1024 * 1024 ||
+                !file.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest("Оберіть JSON-файл експорту одного чату розміром до 20 МБ.");
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var actor = db.AuditActorUserId;
+                db.AuditActorUserId = null;
+                var result = await TelegramDesktopImport.ImportAsync(stream, chat, incidents, DateTimeOffset.UtcNow, ct);
+                db.AuditEvents.Add(new AuditEvent { ActorUserId = actor, Action = "import-telegram-export",
+                    Entity = "SourceChat", EntityId = chat.Id,
+                    Detail = $"Eligible={result.EligibleMessages}, imported={result.ImportedMessages}, duplicates={result.Duplicates}, review={result.NeedsReview}",
+                    CreatedAtUtc = DateTimeOffset.UtcNow });
+                await db.SaveChangesAsync(ct);
+                return Results.Ok(result);
+            }
+            catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException or ArgumentOutOfRangeException)
+            {
+                return Results.BadRequest(ex.Message);
+            }
+        });
         api.MapPut("/admin/reminder", async (ReminderEdit data, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req,auth,sessions,db,ct)) return Results.StatusCode(403);

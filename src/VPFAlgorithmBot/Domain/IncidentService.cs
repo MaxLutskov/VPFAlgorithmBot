@@ -9,9 +9,12 @@ public sealed record IngestResult(string Status, long? IncidentId = null, string
 public sealed class IncidentService(AlgorithmDbContext db)
 {
     public Task<IngestResult> IngestAsync(InboundEvent input, CancellationToken ct = default) =>
-        DatabaseWork.RunAsync(db, () => IngestCoreAsync(input, ct), ct);
+        DatabaseWork.RunAsync(db, () => IngestCoreAsync(input, false, ct), ct);
 
-    private async Task<IngestResult> IngestCoreAsync(InboundEvent input, CancellationToken ct)
+    public Task<IngestResult> IngestFromExportAsync(InboundEvent input, CancellationToken ct = default) =>
+        DatabaseWork.RunAsync(db, () => IngestCoreAsync(input, true, ct), ct);
+
+    private async Task<IngestResult> IngestCoreAsync(InboundEvent input, bool fromExport, CancellationToken ct)
     {
         var chat = await db.Chats.SingleOrDefaultAsync(x => x.TelegramChatId == input.ChatTelegramId && x.Enabled, ct);
         if (chat is null) return new("Ignored", Reason: "Невідомий чат");
@@ -67,17 +70,34 @@ public sealed class IncidentService(AlgorithmDbContext db)
             var incident = new Incident
             {
                 ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
-                AlgorithmRuleId = rule.Id, StartedAtUtc = occurred, StartMessageId = message.Id
+                AlgorithmRuleId = rule.Id, StartedAtUtc = occurred, StartMessageId = message.Id,
+                Quality = fromExport ? "export_missing_end" : "complete"
             };
             db.Incidents.Add(incident);
             await db.SaveChangesAsync(ct);
-            message.Status = "processed";
+            message.Status = fromExport ? "imported" : "processed";
             message.IncidentId = incident.Id;
-            await QueueNotificationsAsync(incident, "problem", ct);
+            if (!fromExport) await QueueNotificationsAsync(incident, "problem", ct);
             await db.SaveChangesAsync(ct);
             return new("Created", incident.Id);
         }
         var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
+        if (candidates.Count == 0 && fromExport && EventParser.Duration(input.Text) is { } duration)
+        {
+            var inferred = new Incident
+            {
+                ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
+                AlgorithmRuleId = rule.Id, StartedAtUtc = occurred - duration,
+                EndedAtUtc = occurred, StartMessageId = message.Id, EndMessageId = message.Id,
+                Quality = "export_inferred_start"
+            };
+            db.Incidents.Add(inferred);
+            await db.SaveChangesAsync(ct);
+            message.Status = "imported";
+            message.IncidentId = inferred.Id;
+            await db.SaveChangesAsync(ct);
+            return new("Resolved", inferred.Id);
+        }
         if (candidates.Count != 1 || occurred < candidates[0].StartedAtUtc)
         {
             message.Status = "review";
@@ -88,9 +108,10 @@ public sealed class IncidentService(AlgorithmDbContext db)
         var current = candidates[0];
         current.EndedAtUtc = occurred;
         current.EndMessageId = message.Id;
-        message.Status = "processed";
+        if (fromExport && current.Quality == "export_missing_end") current.Quality = "export_complete";
+        message.Status = fromExport ? "imported" : "processed";
         message.IncidentId = current.Id;
-        await QueueNotificationsAsync(current, "recovery", ct);
+        if (!fromExport) await QueueNotificationsAsync(current, "recovery", ct);
         await db.SaveChangesAsync(ct);
         return new("Resolved", current.Id);
     }

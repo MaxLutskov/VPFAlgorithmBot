@@ -13,7 +13,7 @@ async function api<T>(path:string, method='GET', body?:unknown):Promise<T> {
 }
 const date=(x:string|null)=>x?new Intl.DateTimeFormat('uk-UA',{timeZone:'Europe/Kyiv',dateStyle:'short',timeStyle:'medium'}).format(new Date(x)):'—'
 const kyivToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
-const qualityLabels:Record<string,string>={historical:'Імпортовано з архіву Telegram',historical_inferred_start:'Архів: початок відновлено за тривалістю',historical_missing_end:'Архів: повідомлення про завершення відсутнє; поточний стан не підтверджено',historical_duration_mismatch:'Архів: час у повідомленнях відрізняється від зазначеної тривалості'}
+const qualityLabels:Record<string,string>={historical:'Імпортовано з архіву Telegram',historical_inferred_start:'Архів: початок відновлено за тривалістю',historical_missing_end:'Архів: повідомлення про завершення відсутнє; поточний стан не підтверджено',historical_duration_mismatch:'Архів: час у повідомленнях відрізняється від зазначеної тривалості',export_missing_end:'Імпорт: завершення не знайдено; поточний стан не підтверджено',export_inferred_start:'Імпорт: початок відновлено за тривалістю',export_complete:'Імпортовано з експорту Telegram'}
 const quality=(x:string)=>qualityLabels[x]||''
 const state=(x:string)=>x==='Active'?'Активний':x==='Resolved'?'Завершений':x==='Answered'?'Відповідь надана':'Без відповіді'
 const namePattern=(name:string)=>'^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$'
@@ -37,6 +37,8 @@ export default function App(){
   const [editId,setEditId]=useState<number|null>(null)
   const [lookups,setLookups]=useState<{objects:{id:number,name:string,code:string}[],algorithms:{id:number,name:string}[]}>({objects:[],algorithms:[]})
   const [reminder,setReminder]=useState('0')
+  const [exportChatId,setExportChatId]=useState('')
+  const [exportFile,setExportFile]=useState<File|null>(null)
 
   const load=useCallback(async()=>{
     setBusy(true)
@@ -83,6 +85,16 @@ export default function App(){
   }
   async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
   async function saveUser(u:Record<string,unknown>,displayName:string,role:string){try{if(!displayName.trim())throw new Error('Введіть службове ім’я.');await api('/admin/users/'+u.id,'PUT',{displayName:displayName.trim(),role,status:u.status});setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Користувача оновлено')}catch(e){setNotice(String(e))}}
+  async function importExport(){
+    try{
+      if(!exportChatId||!exportFile)throw new Error('Оберіть чат і файл result.json.')
+      const payload=new FormData();payload.append('file',exportFile)
+      const response=await fetch('/api/miniapp/admin/import-export/'+exportChatId,{method:'POST',headers:{'X-Telegram-Init-Data':window.Telegram?.WebApp?.initData||'','X-Demo-User-Id':demoId,'X-Admin-Token':adminToken},body:payload})
+      const result=await readApiResponse<{eligibleMessages:number,importedMessages:number,duplicates:number,needsReview:number}>(response)
+      setExportFile(null);await load()
+      setNotice(`За останні 72 години: знайдено ${result.eligibleMessages}, імпортовано ${result.importedMessages}. Дублікати: ${result.duplicates}; потребують перевірки: ${result.needsReview}.`)
+    }catch(e){setNotice(String(e))}
+  }
   return <div className="shell">
     <header><div><p className="eyebrow">VPF ALGORITHM BOT</p><h1>Виробничі алгоритми</h1><p>{me?.displayName || 'Завантаження облікового запису'}</p></div><button className="refresh" onClick={()=>void load()}>{busy?'Оновлення…':'Оновити'}</button></header>
     <nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>Дешборд</button><button className={tab==='history'?'selected':''} onClick={()=>{setFilter('all');setTab('history')}}>Історія</button>{me?.role==='admin'&&<button className={tab==='admin'?'selected':''} onClick={()=>setTab('admin')}>Адмінпанель</button>}</nav>
@@ -92,8 +104,8 @@ export default function App(){
       <section className="metrics"><div><strong>{stats.active??0}</strong><span>Активні</span></div><div><strong>{stats.unanswered??0}</strong><span>Без відповіді</span></div><div><strong>{stats.resolvedUnanswered??0}</strong><span>Завершені без відповіді</span></div></section>
       <section className="section-head"><h2>{tab==='dashboard'?'Активні алгоритми':'Історія алгоритмів'}</h2><select value={tab==='dashboard'?'active':filter} onChange={e=>setFilter(e.target.value)} disabled={tab==='dashboard'}><option value="active">Активні</option><option value="unanswered">Без відповіді</option><option value="all">Усі</option></select></section>
       <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id))}catch(e){setNotice(String(e))}}}>
-        <div className="card-top"><b>Алгоритм №{i.id}</b><span className={i.problemState==='Active'?'badge active':'badge'}>{state(i.problemState)}</span></div>
-        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||`Об’єкт №${i.objectId}`} · {lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||`Тип №${i.algorithmRuleId}`}</p><small>Початок: {date(i.startedAtUtc)}</small><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
+        <div className="card-top"><div><b>{lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||'Алгоритм'}</b><small>{date(i.startedAtUtc)}</small></div><span className={i.problemState==='Active'?'badge active':'badge'}>{state(i.problemState)}</span></div>
+        <p>{lookups.objects.find(x=>x.id===i.objectId)?.name||'Об’єкт не визначено'}</p><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
@@ -103,9 +115,10 @@ export default function App(){
         onCancel={()=>{setEditId(null);setForm({})}}
         onRemoveScope={row=>{void (async()=>{try{await api(`/admin/scopes/${row.userId}/${row.objectId}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Доступ прибрано')}catch(e){setNotice(String(e))}})()}} />
       <AdminUsers catalog={catalog} onStatus={(user,status)=>void approve(user,status)} onSave={(user,displayName,role)=>void saveUser(user,displayName,role)} />
+      <div className="panel"><h3>Завантажити історію чату за 3 дні</h3><p>У Telegram Desktop відкрийте потрібний чат → «Експортувати історію чату» → формат JSON. Завантажте result.json сюди. Бот обробить лише повідомлення за останні 72 години, а подальші події отримуватиме через webhook.</p><label>Чат<select value={exportChatId} onChange={e=>setExportChatId(e.target.value)}><option value="">Оберіть чат</option>{catalog.chats.filter(x=>x.enabled).map(x=><option key={String(x.id)} value={String(x.id)}>{String(x.name)}</option>)}</select></label><label>Файл JSON<input type="file" accept=".json,application/json" onChange={e=>setExportFile(e.target.files?.[0]||null)}/></label><button onClick={()=>void importExport()}>Завантажити історію</button></div>
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>
       <AdminLogs catalog={catalog}/>
     </>}</section>}
-    {detail&&<div className="overlay" onClick={()=>setDetail(null)}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setDetail(null)}>Закрити</button><h2>Алгоритм №{detail.id}</h2><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Початок: {date(detail.startedAtUtc)}<br/>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає. Їх можна надати в чаті з ботом навіть після завершення.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
+    {detail&&<div className="overlay" onClick={()=>setDetail(null)}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setDetail(null)}>Закрити</button><h2>{lookups.algorithms.find(x=>x.id===detail.algorithmRuleId)?.name||'Алгоритм'}</h2><p>{date(detail.startedAtUtc)} · {lookups.objects.find(x=>x.id===detail.objectId)?.name||'Об’єкт не визначено'}</p><p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає. Їх можна надати в чаті з ботом навіть після завершення.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
   </div>
 }
