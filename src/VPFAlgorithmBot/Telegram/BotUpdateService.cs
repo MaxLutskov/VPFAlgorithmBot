@@ -42,7 +42,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
                 db.Users.Add(user);
                 await db.SaveChangesAsync(ct);
             }
-            await telegram.SendAsync(sender.Id, user.Status == "approved" ? "Доступ активний." : "Запит доступу надіслано адміністратору.", null, ct);
+            await SendBestEffortAsync(sender.Id, user.Status == "approved" ? "Доступ активний." : "Запит доступу надіслано адміністратору.", null, ct);
             return;
         }
         var approved = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == sender.Id && x.Status == "approved", ct);
@@ -52,10 +52,10 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             var parts = message.Text.Split(' ', 3);
             if (parts.Length < 3 || !long.TryParse(parts[1], out var id)) return;
             await incidents.RespondAsync(id, sender.Id, parts[2], null, $"message:{message.Chat.Id}:{message.MessageId}", ct);
-            await telegram.SendAsync(sender.Id, $"Відповідь на алгоритм №{id} збережено.", null, ct);
+            await SendBestEffortAsync(sender.Id, $"Відповідь на алгоритм №{id} збережено.", null, ct);
             return;
         }
-        await telegram.SendAsync(sender.Id, "Щоб надати власну відповідь, надішліть: /answer НОМЕР текст. Або оберіть готову відповідь під повідомленням алгоритму.", null, ct);
+        await SendBestEffortAsync(sender.Id, "Щоб надати власну відповідь, надішліть: /answer НОМЕР текст. Або оберіть готову відповідь під повідомленням алгоритму.", null, ct);
     }
 
     private async Task HandleCallbackAsync(TelegramCallback callback, CancellationToken ct)
@@ -63,7 +63,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         var user = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == callback.From.Id && x.Status == "approved", ct);
         if (user is null)
         {
-            await telegram.AnswerCallbackAsync(callback.Id, "Доступ не підтверджено", ct);
+            await AnswerCallbackBestEffortAsync(callback.Id, "Доступ не підтверджено", ct);
             return;
         }
         var parts = callback.Data.Split(':');
@@ -73,7 +73,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         var allowed = user.Role == "admin" || (user.Role == "operator" && await db.UserScopes.AnyAsync(x => x.UserId == user.Id && x.ObjectId == incident.ObjectId, ct));
         if (!allowed)
         {
-            await telegram.AnswerCallbackAsync(callback.Id, "Немає доступу до об’єкта", ct);
+            await AnswerCallbackBestEffortAsync(callback.Id, "Немає доступу до об’єкта", ct);
             return;
         }
         if (parts[0] == "templates")
@@ -81,15 +81,37 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             var templates = await db.ResponseTemplates.Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
                 .OrderBy(x => x.SortOrder).ThenBy(x => x.Id).Take(30).ToListAsync(ct);
             var buttons = templates.Select(x => new[] { new { text = x.Title, callback_data = $"template:{incidentId}:{x.Id}" } }).ToArray();
-            await telegram.AnswerCallbackAsync(callback.Id, "Оберіть відповідь", ct);
-            await telegram.SendAsync(callback.From.Id,
+            await AnswerCallbackBestEffortAsync(callback.Id, "Оберіть відповідь", ct);
+            await SendBestEffortAsync(callback.From.Id,
                 $"Алгоритм №{incidentId}: оберіть готову відповідь або напишіть /answer {incidentId} текст", new { inline_keyboard = buttons }, ct);
         }
         else if (parts[0] == "template" && parts.Length == 3 && int.TryParse(parts[2], out var templateId))
         {
             await incidents.RespondAsync(incidentId, callback.From.Id, "", templateId, $"callback:{callback.Id}", ct);
-            await telegram.AnswerCallbackAsync(callback.Id, "Відповідь збережено", ct);
-            await telegram.SendAsync(callback.From.Id, $"Відповідь на алгоритм №{incidentId} збережено.", null, ct);
+            await AnswerCallbackBestEffortAsync(callback.Id, "Відповідь збережено", ct);
+            await SendBestEffortAsync(callback.From.Id, $"Відповідь на алгоритм №{incidentId} збережено.", null, ct);
+        }
+    }
+
+    private async Task SendBestEffortAsync(long chatId, string text, object? markup, CancellationToken ct)
+    {
+        try { await telegram.SendAsync(chatId, text, markup, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Telegram sendMessage failed: {ErrorType}, HTTP {StatusCode}",
+                ex.GetType().Name, (ex as HttpRequestException)?.StatusCode);
+        }
+    }
+
+    private async Task AnswerCallbackBestEffortAsync(string callbackId, string text, CancellationToken ct)
+    {
+        try { await telegram.AnswerCallbackAsync(callbackId, text, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Telegram answerCallbackQuery failed: {ErrorType}, HTTP {StatusCode}",
+                ex.GetType().Name, (ex as HttpRequestException)?.StatusCode);
         }
     }
 }

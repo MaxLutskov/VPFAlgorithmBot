@@ -21,7 +21,9 @@ public sealed class TelegramClient(HttpClient http, IConfiguration config)
     }
 
     public Task<JsonElement> SendAsync(long chatId, string text, object? markup, CancellationToken ct) =>
-        CallAsync("sendMessage", new { chat_id = chatId, text, reply_markup = markup }, ct);
+        markup is null
+            ? CallAsync("sendMessage", new { chat_id = chatId, text }, ct)
+            : CallAsync("sendMessage", new { chat_id = chatId, text, reply_markup = markup }, ct);
     public Task<JsonElement> AnswerCallbackAsync(string id, string text, CancellationToken ct) =>
         CallAsync("answerCallbackQuery", new { callback_query_id = id, text }, ct);
     public Task<JsonElement> DeleteWebhookAsync(CancellationToken ct) =>

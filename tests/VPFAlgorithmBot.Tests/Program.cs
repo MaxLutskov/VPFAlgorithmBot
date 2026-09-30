@@ -3,6 +3,9 @@ using VPFAlgorithmBot.Api;
 using VPFAlgorithmBot.Data;
 using VPFAlgorithmBot.Domain;
 using VPFAlgorithmBot.Telegram;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
 
 static void Check(bool condition, string message)
 {
@@ -240,3 +243,27 @@ Check((await sharedService.IngestAsync(new InboundEvent(-3300, 77, 13, started.A
     (await sharedDb.Incidents.FindAsync(newFor7.IncidentId))!.EndedAtUtc is null,
     "recovery for RCHV 2 does not close RCHV 7");
 Console.WriteLine("ALL SHARED ALGORITHM TESTS PASSED");
+
+var failingTelegram = new CapturingTelegramHandler();
+var telegramConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    { ["Telegram:BotToken"] = "test-token" }).Build();
+var botUpdates = new BotUpdateService(db, service, new TelegramClient(new HttpClient(failingTelegram), telegramConfig),
+    telegramConfig, NullLogger<BotUpdateService>.Instance);
+await botUpdates.HandleAsync(new TelegramUpdate { Message = new TelegramMessage
+{
+    Chat = new TelegramChat { Id = 900001, Type = "private" },
+    From = new TelegramUser { Id = 900001, FirstName = "Test" },
+    MessageId = 9001, Date = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Text = "/start"
+} }, CancellationToken.None);
+Check(failingTelegram.Body is not null && !failingTelegram.Body.Contains("reply_markup"),
+    "failed private Telegram reply is acknowledged without a webhook retry or null reply_markup");
+
+sealed class CapturingTelegramHandler : HttpMessageHandler
+{
+    public string? Body { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Body = await request.Content!.ReadAsStringAsync(cancellationToken);
+        return new HttpResponseMessage(HttpStatusCode.BadRequest);
+    }
+}
