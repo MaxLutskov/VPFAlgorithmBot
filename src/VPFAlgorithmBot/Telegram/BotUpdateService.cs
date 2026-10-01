@@ -19,6 +19,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         var sender = message.From;
         if (message.Chat.Type != "private")
         {
+            if (await HandleGroupCustomReplyAsync(message, ct)) return;
             var senderId = sender?.Id ?? message.SenderChat?.Id ?? 0;
             var result = await incidents.IngestAsync(new InboundEvent(message.Chat.Id, senderId, message.MessageId,
                 DateTimeOffset.FromUnixTimeSeconds(message.Date), message.Text), ct);
@@ -72,7 +73,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             return;
         }
         var pending = await db.PendingCustomAnswers.FindAsync([approved.Id], ct);
-        if (pending is null)
+        if (pending is null || pending.ChatTelegramId is not null)
         {
             await SendBestEffortAsync(sender.Id, "Спочатку оберіть алгоритм кнопкою «Надати відповідь», потім натисніть «Своя відповідь».", null, ct);
             return;
@@ -103,6 +104,42 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         }
     }
 
+    private async Task<bool> HandleGroupCustomReplyAsync(TelegramMessage message, CancellationToken ct)
+    {
+        if (message.From is null || message.ReplyToMessage is null || string.IsNullOrWhiteSpace(message.Text)) return false;
+        var user = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == message.From.Id && x.Status == "approved", ct);
+        if (user is null) return false;
+        var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
+        if (pending?.ChatTelegramId != message.Chat.Id || pending.PromptMessageTelegramId != message.ReplyToMessage.MessageId)
+            return false;
+        if (pending.RequestedAtUtc < DateTimeOffset.UtcNow.AddHours(-24))
+        {
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(message.Chat.Id, $"{user.DisplayName}: час для цієї відповіді минув. Оберіть алгоритм знову.", null, ct);
+            return true;
+        }
+        try
+        {
+            await incidents.RespondAsync(pending.IncidentId, message.From.Id, message.Text, null,
+                $"message:{message.Chat.Id}:{message.MessageId}", ct);
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(message.Chat.Id, $"✅ {user.DisplayName}: відповідь збережено.", null, ct);
+        }
+        catch (ArgumentException ex)
+        {
+            await SendBestEffortAsync(message.Chat.Id, $"{user.DisplayName}: {ex.Message} Напишіть відповідь ще раз як відповідь на запит бота.", null, ct);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(message.Chat.Id, $"{user.DisplayName}: немає доступу до цього алгоритму.", null, ct);
+        }
+        return true;
+    }
+
     private async Task HandleCallbackAsync(TelegramCallback callback, CancellationToken ct)
     {
         var user = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == callback.From.Id && x.Status == "approved", ct);
@@ -115,6 +152,16 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         if (parts.Length < 2 || !long.TryParse(parts[1], out var incidentId)) return;
         var incident = await db.Incidents.FindAsync([incidentId], ct);
         if (incident is null) return;
+        var groupChat = callback.Message?.Chat.Type == "private" ? null : callback.Message?.Chat;
+        if (groupChat is not null)
+        {
+            var source = await db.Chats.FindAsync([incident.ChatId], ct);
+            if (source?.TelegramChatId != groupChat.Id)
+            {
+                await AnswerCallbackBestEffortAsync(callback.Id, "Цей алгоритм належить іншому чату", ct);
+                return;
+            }
+        }
         var allowed = user.Role == "admin" || (user.Role == "operator" && await db.UserScopes.AnyAsync(x => x.UserId == user.Id && x.ObjectId == incident.ObjectId, ct));
         if (!allowed)
         {
@@ -125,22 +172,57 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         {
             var templates = await db.ResponseTemplates.Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
                 .OrderBy(x => x.SortOrder).ThenBy(x => x.Id).Take(30).ToListAsync(ct);
-            var buttons = templates.Select(x => new[] { new { text = x.Title, callback_data = $"template:{incidentId}:{x.Id}" } })
-                .Append([new { text = "✍️ Своя відповідь", callback_data = $"custom:{incidentId}" }]).ToArray();
             var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
             var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
             await AnswerCallbackBestEffortAsync(callback.Id, "Оберіть відповідь", ct);
             await SendBestEffortAsync(callback.From.Id,
-                $"{obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:", new { inline_keyboard = buttons }, ct);
+                $"{obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:",
+                ResponseKeyboard.Build(incidentId, templates), ct);
         }
         else if (parts[0] == "custom")
         {
-            var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
-            if (pending is null) db.PendingCustomAnswers.Add(new PendingCustomAnswer { UserId = user.Id, IncidentId = incidentId, RequestedAtUtc = DateTimeOffset.UtcNow });
-            else { pending.IncidentId = incidentId; pending.RequestedAtUtc = DateTimeOffset.UtcNow; }
-            await db.SaveChangesAsync(ct);
             var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
             var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
+            if (groupChat is not null)
+            {
+                if (groupChat.Type == "channel")
+                {
+                    await AnswerCallbackBestEffortAsync(callback.Id, "Власна відповідь доступна лише в групі або приватному чаті", ct);
+                    return;
+                }
+                try
+                {
+                    var addressee = string.IsNullOrWhiteSpace(callback.From.Username)
+                        ? callback.From.DisplayName : $"@{callback.From.Username}";
+                    var sent = await telegram.SendAsync(groupChat.Id,
+                        $"{addressee}: {obj?.Name} — {rule?.Name}\nНапишіть свою відповідь саме у відповідь на це повідомлення:",
+                        new { force_reply = true, selective = true, input_field_placeholder = "Ваша відповідь" }, ct);
+                    var promptId = sent.GetProperty("message_id").GetInt32();
+                    var groupPending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
+                    if (groupPending is null)
+                        db.PendingCustomAnswers.Add(new PendingCustomAnswer { UserId = user.Id, IncidentId = incidentId,
+                            ChatTelegramId = groupChat.Id, PromptMessageTelegramId = promptId, RequestedAtUtc = DateTimeOffset.UtcNow });
+                    else
+                    {
+                        groupPending.IncidentId = incidentId;
+                        groupPending.ChatTelegramId = groupChat.Id;
+                        groupPending.PromptMessageTelegramId = promptId;
+                        groupPending.RequestedAtUtc = DateTimeOffset.UtcNow;
+                    }
+                    await db.SaveChangesAsync(ct);
+                    await AnswerCallbackBestEffortAsync(callback.Id, "Напишіть відповідь на запит бота", ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "Не вдалося запросити власну відповідь у чаті");
+                    await AnswerCallbackBestEffortAsync(callback.Id, "Не вдалося надіслати запит у чат. Спробуйте ще раз.", ct);
+                }
+                return;
+            }
+            var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
+            if (pending is null) db.PendingCustomAnswers.Add(new PendingCustomAnswer { UserId = user.Id, IncidentId = incidentId, RequestedAtUtc = DateTimeOffset.UtcNow });
+            else { pending.IncidentId = incidentId; pending.ChatTelegramId = null; pending.PromptMessageTelegramId = null; pending.RequestedAtUtc = DateTimeOffset.UtcNow; }
+            await db.SaveChangesAsync(ct);
             await AnswerCallbackBestEffortAsync(callback.Id, "Напишіть відповідь", ct);
             await SendBestEffortAsync(callback.From.Id, $"{obj?.Name} — {rule?.Name}\nНапишіть свою відповідь звичайним повідомленням:",
                 new { force_reply = true, input_field_placeholder = "Ваша відповідь" }, ct);
@@ -161,7 +243,8 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
             if (pending is not null) { db.PendingCustomAnswers.Remove(pending); await db.SaveChangesAsync(ct); }
             await AnswerCallbackBestEffortAsync(callback.Id, "Відповідь збережено", ct);
-            await SendBestEffortAsync(callback.From.Id, "Відповідь збережено.", null, ct);
+            if (groupChat is null) await SendBestEffortAsync(callback.From.Id, "Відповідь збережено.", null, ct);
+            else await SendBestEffortAsync(groupChat.Id, $"✅ {user.DisplayName}: відповідь збережено.", null, ct);
         }
     }
 

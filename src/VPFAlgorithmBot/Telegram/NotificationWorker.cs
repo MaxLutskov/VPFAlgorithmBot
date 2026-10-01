@@ -19,6 +19,39 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                     .OrderBy(x => x.Id).Take(20).ToListAsync(stoppingToken);
                 foreach (var item in due)
                 {
+                    if (item.Kind == "chat_prompt")
+                    {
+                        try
+                        {
+                            var incident = await db.Incidents.FindAsync([item.IncidentId], stoppingToken);
+                            var chat = incident is null ? null : await db.Chats.FindAsync([incident.ChatId], stoppingToken);
+                            if (chat is null || !chat.Enabled)
+                            {
+                                item.Status = "failed"; item.LastError = "Чат недоступний"; continue;
+                            }
+                            if (config["Telegram:Mode"] != "Demo")
+                            {
+                                var obj = await db.Objects.FindAsync([incident!.ObjectId], stoppingToken);
+                                var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], stoppingToken);
+                                var templates = await db.ResponseTemplates.AsNoTracking()
+                                    .Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
+                                    .OrderBy(x => x.SortOrder).ThenBy(x => x.Id).Take(30).ToListAsync(stoppingToken);
+                                await telegram.SendAsync(chat.TelegramChatId,
+                                    $"🔴 {obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:",
+                                    ResponseKeyboard.Build(incident.Id, templates), stoppingToken);
+                            }
+                            item.Status = "sent"; item.SentAtUtc = DateTimeOffset.UtcNow;
+                        }
+                        catch (Exception ex)
+                        {
+                            item.Attempts++;
+                            item.LastError = ex.Message[..Math.Min(300, ex.Message.Length)];
+                            item.Status = item.Attempts >= 8 ? "failed" : "pending";
+                            item.DueAtUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Min(3600, 30 * Math.Pow(2, item.Attempts)));
+                            logger.LogWarning(ex, "Помилка доставки варіантів у чат {OutboxId}", item.Id);
+                        }
+                        continue;
+                    }
                     if (item.Kind.StartsWith("reminder:") && await db.Responses.AnyAsync(x => x.IncidentId == item.IncidentId, stoppingToken))
                     {
                         item.Status = "cancelled";

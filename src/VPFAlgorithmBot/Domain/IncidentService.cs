@@ -141,8 +141,14 @@ public sealed class IncidentService(AlgorithmDbContext db)
 
     private async Task QueueNotificationsAsync(Incident incident, string kind, CancellationToken ct)
     {
-        // Chats only identify an ingestion source. Every enabled assignment for the
-        // affected object receives the event, regardless of its legacy chat/category fields.
+        if (kind == "problem")
+            db.NotificationOutbox.Add(new NotificationOutbox
+            {
+                IncidentId = incident.Id, UserId = 0, Kind = "chat_prompt",
+                Text = "Варіанти відповіді для чату алгоритму",
+                DueAtUtc = DateTimeOffset.UtcNow
+            });
+        // Assignments depend on the object, not on legacy chat/category fields.
         var recipients = await db.RouteRules.AsNoTracking()
             .Where(x => x.Enabled && x.ObjectId == incident.ObjectId)
             .Select(x => x.UserId).Distinct().ToArrayAsync(ct);

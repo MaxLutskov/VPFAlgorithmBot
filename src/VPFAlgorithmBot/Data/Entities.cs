@@ -20,6 +20,8 @@ public sealed class PendingCustomAnswer
     public int UserId { get; set; }
     public long IncidentId { get; set; }
     public DateTimeOffset RequestedAtUtc { get; set; }
+    public long? ChatTelegramId { get; set; }
+    public int? PromptMessageTelegramId { get; set; }
 }
 public sealed class SourceChat
 {

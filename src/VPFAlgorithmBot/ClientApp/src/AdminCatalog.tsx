@@ -176,7 +176,7 @@ export function AdminLogs({catalog}: {catalog:Catalog}){
       <p className="history-answer">{String(item.text)}</p><small>Збережено: {when(item.savedAtUtc)}</small>
     </div>)}</details>
     <details><summary>Повідомлення для перевірки ({catalog.reviews.length})</summary>{catalog.reviews.map((item,i)=><div className="record" key={i}><strong>{name(catalog.chats,item.chatId)}</strong><p>{String(item.text)}</p><small>{String(item.parseError??'Потребує перевірки')}</small></div>)}</details>
-    <details><summary>Доставка повідомлень ({catalog.outbox.length} останніх)</summary>{catalog.outbox.map((item,i)=><div className="record history-item" key={i}><strong>{incidentLabel(item.incidentId)}</strong><p>{String(item.text)}</p><small>Адресат: {name(catalog.users,item.userId,'displayName')} · {deliveryStatuses[String(item.status)]||String(item.status)} · {when(item.sentAtUtc??item.dueAtUtc)}</small></div>)}</details>
+    <details><summary>Доставка повідомлень ({catalog.outbox.length} останніх)</summary>{catalog.outbox.map((item,i)=><div className="record history-item" key={i}><strong>{incidentLabel(item.incidentId)}</strong><p>{String(item.text)}</p><small>Адресат: {item.kind==='chat_prompt'?'чат алгоритму':name(catalog.users,item.userId,'displayName')} · {deliveryStatuses[String(item.status)]||String(item.status)} · {when(item.sentAtUtc??item.dueAtUtc)}</small></div>)}</details>
     <details><summary>Журнал змін ({catalog.audit.length} останніх)</summary>{catalog.audit.length===0?<p className="empty">Змін ще немає.</p>:catalog.audit.map(item=>{
       const fields=parseAuditDetail(item.detail)
       const entity=String(item.entity)

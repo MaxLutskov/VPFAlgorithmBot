@@ -306,12 +306,17 @@ await botUpdates.HandleAsync(new TelegramUpdate { Message = new TelegramMessage
 Check(failingTelegram.Body is not null && !failingTelegram.Body.Contains("reply_markup"),
     "failed private Telegram reply is acknowledged without a webhook retry or null reply_markup");
 
-await using var answerDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
-    .UseInMemoryDatabase("answer-flow-" + Guid.NewGuid()).Options);
+var answerOptions = new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("answer-flow-" + Guid.NewGuid()).Options;
+await using var answerDb = new AlgorithmDbContext(answerOptions);
 await DemoSeeder.SeedAsync(answerDb);
 var answerService = new IncidentService(answerDb);
 var opened = await answerService.IngestAsync(first);
 var answerId = opened.IncidentId!.Value;
+Check(await answerDb.NotificationOutbox.CountAsync(x => x.IncidentId == answerId && x.Kind == "chat_prompt") == 1 &&
+    System.Text.Json.JsonSerializer.Serialize(ResponseKeyboard.Build(answerId,
+        await answerDb.ResponseTemplates.Where(x => x.AlgorithmRuleId == 1).ToListAsync())).Contains($"template:{answerId}:1"),
+    "new live algorithm queues one group prompt with answer buttons");
 var recordingTelegram = new RecordingTelegramHandler();
 var answerTelegram = new TelegramClient(new HttpClient(recordingTelegram), telegramConfig);
 var answerUpdates = new BotUpdateService(answerDb, answerService, answerTelegram, telegramConfig, NullLogger<BotUpdateService>.Instance);
@@ -331,6 +336,55 @@ await resumedUpdates.HandleAsync(plainAnswer, CancellationToken.None);
 await resumedUpdates.HandleAsync(plainAnswer, CancellationToken.None);
 Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.Text == "Перевірено дозатор, роботу відновлено") == 1 &&
     !await answerDb.PendingCustomAnswers.AnyAsync(), "plain custom answer is stored once after service restart");
+
+var groupMessage = new TelegramMessage { Chat = new TelegramChat { Id = -1001, Type = "supergroup" } };
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "other-group", From = new TelegramUser { Id = 900002 },
+      Message = new TelegramMessage { Chat = new TelegramChat { Id = -9999, Type = "supergroup" } },
+      Data = $"template:{answerId}:1" } }, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId) == 1,
+    "buttons from another chat cannot answer this algorithm");
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "group-template-operator", From = new TelegramUser { Id = 900002 }, Message = groupMessage,
+      Data = $"template:{answerId}:1" } }, CancellationToken.None);
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "group-template-admin", From = new TelegramUser { Id = 900001 }, Message = groupMessage,
+      Data = $"template:{answerId}:1" } }, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId) == 3 &&
+    await answerDb.Responses.Where(x => x.IncidentId == answerId).Select(x => x.UserId).Distinct().CountAsync() == 2,
+    "two authorized people may each answer the same algorithm from the group");
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "group-template-admin", From = new TelegramUser { Id = 900001 }, Message = groupMessage,
+      Data = $"template:{answerId}:1" } }, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId) == 3,
+    "repeated group callback does not create a duplicate answer");
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "group-custom", From = new TelegramUser { Id = 900002, FirstName = "Оператор" }, Message = groupMessage,
+      Data = $"custom:{answerId}" } }, CancellationToken.None);
+var groupPending = await answerDb.PendingCustomAnswers.SingleAsync(x => x.IncidentId == answerId);
+Check(groupPending.ChatTelegramId == -1001 && groupPending.PromptMessageTelegramId is not null,
+    "group custom answer is tied to the requesting worker and bot prompt");
+var unrelatedMessage = new TelegramUpdate { Message = new TelegramMessage
+    { Chat = groupMessage.Chat, From = new TelegramUser { Id = 900002 }, MessageId = 4401,
+      ReplyToMessage = new TelegramMessage { MessageId = groupPending.PromptMessageTelegramId!.Value + 1 },
+      Date = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Text = "Стороння розмова" } };
+await answerUpdates.HandleAsync(unrelatedMessage, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId) == 3,
+    "ordinary group conversation is not captured as an answer");
+var groupReply = new TelegramUpdate { Message = new TelegramMessage
+    { Chat = groupMessage.Chat, From = new TelegramUser { Id = 900002 }, MessageId = 4402,
+      ReplyToMessage = new TelegramMessage { MessageId = groupPending.PromptMessageTelegramId!.Value },
+      Date = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Text = "Показники перевірено на місці" } };
+await answerUpdates.HandleAsync(groupReply, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.Text == "Показники перевірено на місці") == 1 &&
+    !await answerDb.PendingCustomAnswers.AnyAsync(), "reply to the group prompt records exactly one custom answer");
+await using var concurrentDb1 = new AlgorithmDbContext(answerOptions);
+await using var concurrentDb2 = new AlgorithmDbContext(answerOptions);
+await Task.WhenAll(
+    new IncidentService(concurrentDb1).RespondAsync(answerId, 900001, "Перевірив оператор 1", null, "concurrent:1"),
+    new IncidentService(concurrentDb2).RespondAsync(answerId, 900002, "Перевірив оператор 2", null, "concurrent:2"));
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.ActionKey!.StartsWith("concurrent:")) == 2,
+    "simultaneous answers by different users are both preserved");
 
 await using var accessDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("access-request-" + Guid.NewGuid()).Options);
@@ -363,10 +417,11 @@ sealed class CapturingTelegramHandler : HttpMessageHandler
 sealed class RecordingTelegramHandler : HttpMessageHandler
 {
     public List<string> Bodies { get; } = [];
+    private int nextMessageId = 5000;
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
         return new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent("{\"ok\":true,\"result\":{}}") };
+            { Content = new StringContent($"{{\"ok\":true,\"result\":{{\"message_id\":{++nextMessageId}}}}}") };
     }
 }
