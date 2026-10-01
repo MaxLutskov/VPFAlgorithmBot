@@ -60,6 +60,16 @@ public sealed class IncidentService(AlgorithmDbContext db)
         await db.SaveChangesAsync(ct);
         if (kind == "problem")
         {
+            var sameStart = await db.Incidents.AsNoTracking().Where(x => x.ChatId == chat.Id &&
+                x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.StartedAtUtc == occurred)
+                .OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
+            if (sameStart is not null)
+            {
+                message.Status = "duplicate";
+                message.IncidentId = sameStart.Id;
+                await db.SaveChangesAsync(ct);
+                return new("Duplicate", sameStart.Id);
+            }
             if (await db.Incidents.AnyAsync(x => x.ChatId == chat.Id && x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null, ct))
             {
                 message.Status = "review";
@@ -82,6 +92,19 @@ public sealed class IncidentService(AlgorithmDbContext db)
             return new("Created", incident.Id);
         }
         var candidates = await db.Incidents.Where(x => x.ChatId == chat.Id && x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == null).ToListAsync(ct);
+        if (candidates.Count == 0)
+        {
+            var sameEnd = await db.Incidents.AsNoTracking().Where(x => x.ChatId == chat.Id &&
+                x.ObjectId == obj.Id && x.AlgorithmRuleId == rule.Id && x.EndedAtUtc == occurred)
+                .OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
+            if (sameEnd is not null)
+            {
+                message.Status = "duplicate";
+                message.IncidentId = sameEnd.Id;
+                await db.SaveChangesAsync(ct);
+                return new("Duplicate", sameEnd.Id);
+            }
+        }
         if (candidates.Count == 0 && fromExport && EventParser.Duration(input.Text) is { } duration)
         {
             var inferred = new Incident

@@ -194,6 +194,34 @@ exportJson.Position = 0;
 var repeatedExport = await TelegramDesktopImport.ImportAsync(exportJson, exportChat, exportService, exportNow);
 Check(repeatedExport.Duplicates == 3 && await exportDb.Incidents.CountAsync() == 2, "repeated export does not duplicate incidents");
 
+await using var overlapDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("live-export-overlap-" + Guid.NewGuid()).Options);
+await DemoSeeder.SeedAsync(overlapDb);
+var overlapService = new IncidentService(overlapDb);
+var liveStart = await overlapService.IngestAsync(first);
+await overlapService.IngestAsync(green);
+var overlapChat = await overlapDb.Chats.SingleAsync();
+var overlapExport = new { messages = new object[]
+{
+    new { id = 990, type = "message", date_unixtime = started.ToUnixTimeSeconds().ToString(), from_id = "user77", text = first.Text },
+    new { id = 991, type = "message", date_unixtime = green.TelegramDateUtc.ToUnixTimeSeconds().ToString(), from_id = "user77", text = green.Text }
+} };
+using var overlapJson = new MemoryStream(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(overlapExport));
+var overlapResult = await TelegramDesktopImport.ImportAsync(overlapJson, overlapChat, overlapService, exportNow);
+Check(overlapResult.Duplicates == 2 && await overlapDb.Incidents.CountAsync() == 1 &&
+    await overlapDb.IncomingMessages.CountAsync(x => x.IncidentId == liveStart.IncidentId) == 4,
+    "Telegram export with different message IDs reuses the live incident");
+
+var exportedStart = new InboundEvent(-1001, 77, 1201, new DateTimeOffset(2026, 9, 29, 7, 0, 0, TimeSpan.Zero),
+    "🔴 10:00:00 ВФС: Тест імпорту");
+var exportedEnd = new InboundEvent(-1001, 77, 1202, new DateTimeOffset(2026, 9, 29, 7, 15, 0, TimeSpan.Zero),
+    "🟢 10:15:00 ВФС: Тест імпорту Тривалість: 15m 0s");
+Check((await exportService.IngestAsync(exportedStart)).Status == "Duplicate" &&
+    (await exportService.IngestAsync(exportedEnd)).Status == "Duplicate" &&
+    await exportDb.Incidents.CountAsync() == 2,
+    "live updates after import do not duplicate the imported incident");
+
+
 var localExportPath = Environment.GetEnvironmentVariable("VPF_TEST_EXPORT_PATH");
 if (!string.IsNullOrWhiteSpace(localExportPath))
 {
