@@ -14,7 +14,8 @@ public static class MiniAppEndpoints
         api.MapGet("/me", async (HttpRequest req, MiniAppAuth auth, AlgorithmDbContext db, CancellationToken ct) =>
         {
             var user = await auth.GetUserAsync(req, db, ct);
-            return user is null ? Results.Unauthorized() : Results.Ok(new { user.Id, user.DisplayName, user.Role, user.Status });
+            return user is null ? Results.Unauthorized() : Results.Ok(new { user.Id, user.DisplayName, user.Role, user.Status,
+                PendingAccessCount = user.Role == "admin" ? await db.Users.CountAsync(x => x.Status == "pending", ct) : 0 });
         });
         api.MapGet("/dashboard", async (HttpRequest req, MiniAppAuth auth, AlgorithmDbContext db, string? period, string? fromDate, string? toDate, CancellationToken ct) =>
         {

@@ -304,6 +304,24 @@ await resumedUpdates.HandleAsync(plainAnswer, CancellationToken.None);
 Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.Text == "Перевірено дозатор, роботу відновлено") == 1 &&
     !await answerDb.PendingCustomAnswers.AnyAsync(), "plain custom answer is stored once after service restart");
 
+await using var accessDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("access-request-" + Guid.NewGuid()).Options);
+await DemoSeeder.SeedAsync(accessDb);
+var accessTelegram = new RecordingTelegramHandler();
+var accessUpdates = new BotUpdateService(accessDb, new IncidentService(accessDb),
+    new TelegramClient(new HttpClient(accessTelegram), telegramConfig), telegramConfig, NullLogger<BotUpdateService>.Instance);
+var accessRequest = new TelegramUpdate { Message = new TelegramMessage
+    { Chat = new TelegramChat { Id = 900010, Type = "private" },
+      From = new TelegramUser { Id = 900010, FirstName = "Нова", LastName = "Людина", Username = "new_worker" },
+      MessageId = 31001, Date = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Text = "/start" } };
+await accessUpdates.HandleAsync(accessRequest, CancellationToken.None);
+await accessUpdates.HandleAsync(accessRequest, CancellationToken.None);
+Check(await accessDb.Users.CountAsync(x => x.TelegramId == 900010 && x.Status == "pending") == 1,
+    "access request creates one pending user");
+Check(accessTelegram.Bodies.Count(body =>
+    System.Text.Json.JsonDocument.Parse(body).RootElement.GetProperty("chat_id").GetInt64() == 900001) == 1,
+    "new access request notifies the administrator only once");
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }

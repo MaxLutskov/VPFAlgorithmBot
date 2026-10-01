@@ -41,8 +41,25 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
                 };
                 db.Users.Add(user);
                 await db.SaveChangesAsync(ct);
+                if (user.Status == "pending")
+                {
+                    var admins = await db.Users.AsNoTracking()
+                        .Where(x => x.Role == "admin" && x.Status == "approved")
+                        .Select(x => x.TelegramId).Distinct().ToListAsync(ct);
+                    foreach (var adminTelegramId in admins)
+                        await SendBestEffortAsync(adminTelegramId,
+                            $"🔔 Новий запит доступу від {user.DisplayName}{(string.IsNullOrWhiteSpace(user.Username) ? "" : $" (@{user.Username})")}. Відкрийте Mini App → Адмінпанель → Користувачі та запити доступу.",
+                            null, ct);
+                }
             }
-            await SendBestEffortAsync(sender.Id, user.Status == "approved" ? "Доступ активний." : "Запит доступу надіслано адміністратору.", null, ct);
+            var statusText = user.Status switch
+            {
+                "approved" => "Доступ активний.",
+                "pending" => "Запит доступу зареєстровано. Очікуйте підтвердження адміністратора.",
+                "blocked" => "Доступ заблоковано. Зверніться до адміністратора.",
+                _ => "Доступ не підтверджено. Зверніться до адміністратора."
+            };
+            await SendBestEffortAsync(sender.Id, statusText, null, ct);
             return;
         }
         var approved = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == sender.Id && x.Status == "approved", ct);

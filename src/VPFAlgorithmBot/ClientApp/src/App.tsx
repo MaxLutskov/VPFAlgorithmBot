@@ -21,7 +21,7 @@ const namePattern=(name:string)=>'^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+
 
 export default function App(){
   const [tab,setTab]=useState<'dashboard'|'history'|'admin'>('dashboard')
-  const [me,setMe]=useState<{id:number,displayName:string,role:string}|null>(null)
+  const [me,setMe]=useState<{id:number,displayName:string,role:string,pendingAccessCount:number}|null>(null)
   const [stats,setStats]=useState<Record<string,number>>({})
   const [items,setItems]=useState<Incident[]>([])
   const [detail,setDetail]=useState<Detail|null>(null)
@@ -55,7 +55,7 @@ export default function App(){
   const load=useCallback(async()=>{
     setBusy(true)
     try{
-      const user=await api<{id:number,displayName:string,role:string}>('/me'); setMe(user)
+      const user=await api<{id:number,displayName:string,role:string,pendingAccessCount:number}>('/me'); setMe(user)
       const params=new URLSearchParams({period})
       if(period==='range'){params.set('fromDate',fromDate);params.set('toDate',toDate)}
       setStats(await api<Record<string,number>>('/dashboard?'+params))
@@ -69,6 +69,15 @@ export default function App(){
     }catch(e){setItems([]);setStats({});setNotice(String(e))}finally{setBusy(false)}
   },[filter,tab,period,fromDate,toDate,selectedChatId])
   useEffect(()=>{window.Telegram?.WebApp?.ready();window.Telegram?.WebApp?.expand();void load()},[load])
+  useEffect(()=>{
+    if(me?.role!=='admin')return
+    const timer=window.setInterval(()=>{void api<typeof me>('/me').then(user=>{
+      if(!user)return
+      setMe(current=>current?{...current,pendingAccessCount:user.pendingAccessCount}:user)
+      if(tab==='admin'&&adminToken)void api<Catalog>('/admin/catalog').then(setCatalog).catch(()=>{})
+    }).catch(()=>{})},30000)
+    return ()=>window.clearInterval(timer)
+  },[me?.role,tab])
 
   async function unlock(){try{const result=await api<{token:string}>('/admin/signin','POST',{password});adminToken=result.token;sessionStorage.setItem('vpfAdminToken',adminToken);const c=await api<Catalog>('/admin/catalog');setCatalog(c);setReminder(c.settings.find(x=>x.key==='reminder_minutes')?.value||'0');setNotice('Адміністративний доступ відкрито')}catch(e){setNotice(String(e))}}
   async function submit(){
@@ -141,7 +150,7 @@ export default function App(){
     }catch(e){setCatalog(previous);setNotice(String(e))}
     finally{setDeleting(false)}
   }
-  async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'))}catch(e){setNotice(String(e))}}
+  async function approve(u:Record<string,unknown>,status:string){try{await api('/admin/users/'+u.id,'PUT',{displayName:u.displayName,role:u.role,status});setCatalog(await api<Catalog>('/admin/catalog'));setMe(await api('/me'))}catch(e){setNotice(String(e))}}
   async function saveUser(u:Record<string,unknown>,displayName:string,role:string){try{if(!displayName.trim())throw new Error('Введіть службове ім’я.');await api('/admin/users/'+u.id,'PUT',{displayName:displayName.trim(),role,status:u.status});setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Користувача оновлено')}catch(e){setNotice(String(e))}}
   async function importExport(){
     if(importing)return
@@ -182,7 +191,7 @@ export default function App(){
   }
   return <div className="shell">
     <header><div><p className="eyebrow">VPF ALGORITHM BOT</p><h1>Виробничі алгоритми</h1><p>{me?.displayName || 'Завантаження облікового запису'}</p></div><button className="refresh" onClick={()=>void load()}>{busy?'Оновлення…':'Оновити'}</button></header>
-    <nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>Дешборд</button><button className={tab==='history'?'selected':''} onClick={()=>{setFilter('all');setTab('history')}}>Історія</button>{me?.role==='admin'&&<button className={tab==='admin'?'selected':''} onClick={()=>setTab('admin')}>Адмінпанель</button>}</nav>
+    <nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>Дешборд</button><button className={tab==='history'?'selected':''} onClick={()=>{setFilter('all');setTab('history')}}>Історія</button>{me?.role==='admin'&&<button className={tab==='admin'?'selected':''} onClick={()=>setTab('admin')}>Адмінпанель{me.pendingAccessCount>0&&<span className="access-count" aria-label={`Запитів доступу: ${me.pendingAccessCount}`}>{me.pendingAccessCount}</span>}</button>}</nav>
     {notice&&<p className="notice">{notice}</p>}
     {tab!=='admin'&&<>
       <section className="period-bar"><label>Період<select value={period} onChange={e=>setPeriod(e.target.value)}><option value="today">Сьогодні</option><option value="yesterday">Вчора</option><option value="range">За датами</option><option value="all">За весь час</option></select></label>{period==='range'&&<><label>Від<input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)}/></label><label>До<input type="date" value={toDate} onChange={e=>setToDate(e.target.value)}/></label></>}<small>За датою початку алгоритму, час Києва</small></section>
@@ -194,6 +203,7 @@ export default function App(){
       </button>)}</div>
     </>}
     {tab==='admin'&&<section className="admin"><h2>Адміністрування</h2>{!catalog?<div className="unlock"><p>Введіть пароль адміністратора.</p><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Пароль"/><button onClick={()=>void unlock()}>Увійти</button></div>:<>
+      {(me?.pendingAccessCount??0)>0&&<div className="access-alert" role="status"><strong>Нові запити доступу: {me?.pendingAccessCount}</strong><a href="#access-requests">Переглянути запити</a></div>}
       {pendingDelete&&<div className="delete-confirm" role="alertdialog" aria-label="Підтвердження видалення"><div><strong>Прибрати «{pendingDelete.label}»?</strong><p>{pendingDelete.type==='routes'?'Усі призначення цього працівника буде видалено.':'Запис зникне з робочого довідника. Історичні дані залишаться.'}</p></div><div className="actions"><button className="danger" onClick={()=>void confirmDelete()}>Так, прибрати</button><button className="secondary" onClick={()=>setPendingDelete(null)}>Скасувати</button></div></div>}
       <details className="panel source-details"><summary>Стан прийому повідомлень із чатів</summary><p>Перевірте webhook і останні події кожного чату. Повідомлення Bot_Outlook надходитимуть лише коли для цього бота ввімкнено Bot-to-Bot Communication у BotFather і він має права адміністратора чату або вимкнений Privacy Mode.</p><button onClick={()=>void checkSources()} disabled={sourceStatusBusy}>{sourceStatusBusy?'Перевіряємо…':'Перевірити підключення'}</button>{sourceStatus&&<div className="source-status" role="status"><p>Webhook: <b>{sourceStatus.webhookConfigured?'налаштований':'не налаштований або адреса не збігається'}</b>; {sourceStatus.pendingUpdates===0?'черга доставлення порожня':`очікують доставлення: ${sourceStatus.pendingUpdates}`}</p>{sourceStatus.lastWebhookError&&<p>Остання помилка Telegram ({date(sourceStatus.lastWebhookErrorAtUtc)}): {sourceStatus.lastWebhookError}</p>}{sourceStatus.chats.map(c=><div className="source-row" key={c.id}><strong>{c.name}</strong><span>Зареєстровано алгоритмів: {c.incidents}, активних: {c.active}</span><span>Останнє повідомлення: {date(c.lastMessage?.telegramDateUtc||null)} ({c.lastMessage?.status||'ще немає'})</span><span>Остання оброблена подія з чату: {date(c.lastProcessedLiveAtUtc)}</span>{c.lastMessage?.parseError&&<span>Причина відхилення: {c.lastMessage.parseError}</span>}</div>)}</div>}</details>
       <label>Довідник<select value={formType} onChange={e=>{setFormType(e.target.value);setForm({});setEditId(null)}}>{Object.keys(specs).map(x=><option key={x} value={x}>{labels[x]}</option>)}</select></label>

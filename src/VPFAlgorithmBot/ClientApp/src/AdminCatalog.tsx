@@ -113,7 +113,7 @@ export function AdminUsers({catalog,onSave,onStatus}: {
   const [editing,setEditing]=useState<string|null>(null)
   const [displayName,setDisplayName]=useState('')
   const [role,setRole]=useState('operator')
-  return <div className="panel"><h3>Користувачі та запити доступу</h3>{catalog.users.map(user=>
+  return <div className="panel" id="access-requests"><h3>Користувачі та запити доступу{catalog.users.filter(user=>user.status==='pending').length>0&&` (${catalog.users.filter(user=>user.status==='pending').length} нових)`}</h3>{[...catalog.users].sort((a,b)=>Number(b.status==='pending')-Number(a.status==='pending')).map(user=>
     <div className="record" key={id(user.id)}><strong>{String(user.displayName)}</strong>
       <p>{roles[String(user.role)]||String(user.role)} · {statuses[String(user.status)]||String(user.status)}</p>
       {editing===id(user.id)?<div className="user-edit"><label>Службове ім’я<input value={displayName} onChange={e=>setDisplayName(e.target.value)}/></label><label>Роль<select value={role} onChange={e=>setRole(e.target.value)}>{Object.entries(roles).map(([value,title])=><option key={value} value={value}>{title}</option>)}</select></label><div className="actions"><button onClick={()=>{onSave(user,displayName,role);setEditing(null)}}>Зберегти</button><button className="secondary" onClick={()=>setEditing(null)}>Скасувати</button></div></div>:
