@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 
 export type Row = Record<string, unknown>
-export type Catalog = { chats:Row[],objects:Row[],categories:Row[],algorithms:Row[],routes:Row[],templates:Row[],templateVersions:Row[],users:Row[],scopes:Row[],settings:{key:string,value:string}[],reviews:Row[],outbox:Row[],audit:Row[] }
+export type Catalog = { chats:Row[],objects:Row[],categories:Row[],algorithms:Row[],routes:Row[],templates:Row[],templateVersions:Row[],answers:Row[],incidentLabels:Row[],users:Row[],scopes:Row[],settings:{key:string,value:string}[],reviews:Row[],outbox:Row[],audit:Row[] }
 export const specs:Record<string,[string,string][]>= {
   chats:[['telegramChatId','number'],['senderTelegramId','number'],['name','text'],['enabled','bool']],
   objects:[['code','text'],['name','text'],['enabled','bool']],
@@ -105,7 +105,21 @@ export function AdminCatalog({catalog,formType,form,setForm,editId,onSubmit,onEd
 const roles:Record<string,string>={admin:'Адміністратор',operator:'Оператор',viewer:'Перегляд'}
 const statuses:Record<string,string>={pending:'Очікує підтвердження',approved:'Підтверджено',denied:'Відхилено',blocked:'Заблоковано'}
 const deliveryStatuses:Record<string,string>={pending:'Очікує надсилання',sent:'Надіслано',failed:'Помилка доставки',cancelled:'Скасовано'}
-const auditActions:Record<string,string>={Added:'Додано',Modified:'Змінено',Deleted:'Видалено','consolidate-algorithms':'Об’єднано алгоритми'}
+const auditActions:Record<string,string>={Added:'Додано',Modified:'Змінено',Deleted:'Видалено',respond:'Надано відповідь на',
+  'import-telegram-export':'Імпортовано історію чату','import-history':'Імпортовано історичні дані',
+  'consolidate-algorithms':'Об’єднано типи алгоритмів','remove-legacy-archive':'Прибрано старий архів'}
+const auditEntities:Record<string,string>={AppUser:'користувача',UserScope:'право перегляду',SourceChat:'чат',
+  MonitoredObject:'об’єкт',ProblemCategory:'категорію',AlgorithmRule:'тип алгоритму',RouteRule:'призначення відповідального',
+  ResponseTemplate:'шаблон відповіді',TemplateVersion:'версію шаблону',Incident:'алгоритм',incident:'алгоритм',
+  IncidentResponse:'відповідь',NotificationOutbox:'сповіщення',Setting:'налаштування',IncomingMessage:'повідомлення'}
+const auditFields:Record<string,string>={Name:'Назва',Code:'Код',DisplayName:'Ім’я працівника',Username:'Telegram-нік',
+  UserId:'Працівник',ObjectId:'Об’єкт',ChatId:'Чат',AlgorithmRuleId:'Алгоритм',Title:'Назва відповіді',Text:'Текст',
+  Enabled:'Увімкнено',Status:'Стан доступу',Role:'Роль',TelegramChatId:'Telegram ID чату',
+  SenderTelegramId:'Telegram ID відправника',TemplateId:'Шаблон',Version:'Версія',SortOrder:'Порядок показу',
+  Key:'Налаштування',Value:'Значення',Eligible:'Повідомлень за 3 дні',imported:'Імпортовано',duplicates:'Пропущено повторних',review:'Потребують перевірки'}
+const parseAuditDetail=(value:unknown):Record<string,string>=>Object.fromEntries(String(value??'').split(/,\s+(?=[A-Za-z][A-Za-z0-9]*=)/)
+  .map(part=>{const separator=part.indexOf('=');return separator<0?null:[part.slice(0,separator),part.slice(separator+1)]})
+  .filter((part):part is string[]=>part!==null))
 
 export function AdminUsers({catalog,onSave,onStatus}: {
   catalog:Catalog,onSave:(user:Row,displayName:string,role:string)=>void,onStatus:(user:Row,status:string)=>void
@@ -124,10 +138,57 @@ export function AdminUsers({catalog,onSave,onStatus}: {
 
 export function AdminLogs({catalog}: {catalog:Catalog}){
   const when=(value:unknown)=>value?new Intl.DateTimeFormat('uk-UA',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Kyiv'}).format(new Date(String(value))):''
+  const incidentLabel=(value:unknown)=>{
+    const incident=find(catalog.incidentLabels,value)
+    return incident?`${String(incident.algorithmName)} · ${String(incident.objectName)}`:'Алгоритм із журналу'
+  }
+  const auditTarget=(item:Row,fields:Record<string,string>)=>{
+    const entity=String(item.entity)
+    if(entity.toLowerCase()==='incident')return incidentLabel(item.entityId)
+    if(entity==='RouteRule'||entity==='UserScope')return [name(catalog.users,fields.UserId,'displayName'),name(catalog.objects,fields.ObjectId)].filter(x=>x&&x!=='Невідомий запис').join(' · ')
+    if(entity==='TemplateVersion'||entity==='ResponseTemplate')return fields.Title||name(catalog.templates,item.entityId,'title')
+    if(entity==='AppUser')return fields.DisplayName||name(catalog.users,item.entityId,'displayName')
+    if(entity==='SourceChat')return fields.Name||name(catalog.chats,item.entityId)
+    if(entity==='MonitoredObject')return fields.Name||name(catalog.objects,item.entityId)
+    if(entity==='AlgorithmRule')return fields.Name||name(catalog.algorithms,item.entityId)
+    if(entity==='Setting')return fields.Key==='reminder_minutes'?'Інтервал нагадувань':fields.Key||''
+    return fields.Name||fields.Title||''
+  }
+  const auditValue=(key:string,value:string)=>{
+    if(key==='UserId')return name(catalog.users,value,'displayName')
+    if(key==='ObjectId')return name(catalog.objects,value)
+    if(key==='ChatId')return name(catalog.chats,value)
+    if(key==='AlgorithmRuleId')return algorithmName(catalog,value)
+    if(key==='TemplateId')return name(catalog.templates,value,'title')
+    if(key==='Enabled')return value.toLowerCase()==='true'?'Так':'Ні'
+    if(key==='Status')return statuses[value]||value
+    if(key==='Role')return roles[value]||value
+    if(key==='Key'&&value==='reminder_minutes')return 'Інтервал нагадувань'
+    return value
+  }
   return <div className="admin-logs">
-    <details><summary>Історія відповідей ({catalog.templateVersions.length})</summary>{catalog.templateVersions.map((item,i)=><div className="record" key={i}><strong>{String(item.title)} · версія {String(item.version)}</strong><p>{String(item.text)}</p><small>{when(item.savedAtUtc)}</small></div>)}</details>
+    <details><summary>Надані відповіді на алгоритми ({catalog.answers.length} останніх)</summary>{catalog.answers.length===0?<p className="empty">Відповідей ще немає.</p>:catalog.answers.map(item=><div className="record history-item" key={id(item.id)}>
+      <strong>{String(item.algorithmName)}</strong><p>{String(item.objectName)} · початок алгоритму {when(item.startedAtUtc)}</p>
+      <p className="history-answer">{String(item.text)}</p><small>Відповів: <b>{String(item.authorName)}</b> · {when(item.createdAtUtc)}</small>
+    </div>)}</details>
+    <details><summary>Історія змін шаблонів ({catalog.templateVersions.length} останніх)</summary>{catalog.templateVersions.length===0?<p className="empty">Змін шаблонів ще немає.</p>:catalog.templateVersions.map(item=><div className="record history-item" key={id(item.id)}>
+      <strong>{String(item.algorithmName)}</strong><p>{String(item.title)} · версія {String(item.version)}</p>
+      <p className="history-answer">{String(item.text)}</p><small>Збережено: {when(item.savedAtUtc)}</small>
+    </div>)}</details>
     <details><summary>Повідомлення для перевірки ({catalog.reviews.length})</summary>{catalog.reviews.map((item,i)=><div className="record" key={i}><strong>{name(catalog.chats,item.chatId)}</strong><p>{String(item.text)}</p><small>{String(item.parseError??'Потребує перевірки')}</small></div>)}</details>
-    <details><summary>Доставка повідомлень ({catalog.outbox.length})</summary>{catalog.outbox.map((item,i)=><div className="record" key={i}><strong>{name(catalog.users,item.userId,'displayName')} · алгоритм №{String(item.incidentId)}</strong><p>{String(item.text)}</p><small>{deliveryStatuses[String(item.status)]||String(item.status)} · {when(item.sentAtUtc??item.dueAtUtc)}</small></div>)}</details>
-    <details><summary>Журнал змін ({catalog.audit.length})</summary>{catalog.audit.map((item,i)=><div className="record" key={i}><strong>{item.actorUserId==null?'Система':name(catalog.users,item.actorUserId,'displayName')} · {auditActions[String(item.action)]||String(item.action)}</strong><small>{when(item.createdAtUtc)}</small></div>)}</details>
+    <details><summary>Доставка повідомлень ({catalog.outbox.length} останніх)</summary>{catalog.outbox.map((item,i)=><div className="record history-item" key={i}><strong>{incidentLabel(item.incidentId)}</strong><p>{String(item.text)}</p><small>Адресат: {name(catalog.users,item.userId,'displayName')} · {deliveryStatuses[String(item.status)]||String(item.status)} · {when(item.sentAtUtc??item.dueAtUtc)}</small></div>)}</details>
+    <details><summary>Журнал змін ({catalog.audit.length} останніх)</summary>{catalog.audit.length===0?<p className="empty">Змін ще немає.</p>:catalog.audit.map(item=>{
+      const fields=parseAuditDetail(item.detail)
+      const entity=String(item.entity)
+      const action=String(item.action)
+      const standaloneAction=['import-telegram-export','import-history','consolidate-algorithms','remove-legacy-archive'].includes(action)
+      const target=auditTarget(item,fields)
+      const entries=Object.entries(fields).filter(([key])=>key in auditFields && !['Id','CreatedAtUtc'].includes(key))
+      return <div className="record history-item" key={id(item.id)}>
+        <strong>{item.actorUserId==null?'Система':name(catalog.users,item.actorUserId,'displayName')} · {auditActions[action]||'Оновлено'}{standaloneAction?'':` ${auditEntities[entity]||'запис'}`}{target&&` «${target}»`}</strong>
+        <small>{when(item.createdAtUtc)}</small>
+        {entries.length>0&&<p className="audit-fields">{entries.map(([key,value])=><span key={key}><b>{auditFields[key]}:</b> {auditValue(key,value)}</span>)}</p>}
+      </div>
+    })}</details>
   </div>
 }

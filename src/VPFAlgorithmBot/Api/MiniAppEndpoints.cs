@@ -127,6 +127,27 @@ public static class MiniAppEndpoints
             var rules = await db.AlgorithmRules.AsNoTracking().ToListAsync(ct);
             var canonical = AlgorithmCatalog.CanonicalIds(rules, objects);
             var canonicalIds = canonical.Values.Distinct().ToArray();
+            var templates = await db.ResponseTemplates.AsNoTracking().ToListAsync(ct);
+            var versions = await db.TemplateVersions.AsNoTracking().OrderByDescending(x => x.SavedAtUtc).Take(100).ToListAsync(ct);
+            var recentAnswers = await (from answer in db.Responses.AsNoTracking()
+                join incident in db.Incidents.AsNoTracking() on answer.IncidentId equals incident.Id
+                join rule in db.AlgorithmRules.AsNoTracking() on incident.AlgorithmRuleId equals rule.Id
+                join monitoredObject in db.Objects.AsNoTracking() on incident.ObjectId equals monitoredObject.Id
+                join author in db.Users.AsNoTracking() on answer.UserId equals author.Id
+                orderby answer.CreatedAtUtc descending, answer.Id descending
+                select new { answer.Id, answer.IncidentId, answer.Text, answer.CreatedAtUtc,
+                    AlgorithmName = rule.Name, ObjectName = monitoredObject.Name,
+                    AuthorName = author.DisplayName, incident.StartedAtUtc }).Take(100).ToListAsync(ct);
+            var audit = await db.AuditEvents.AsNoTracking().OrderByDescending(x => x.Id).Take(100).ToListAsync(ct);
+            var outbox = await db.NotificationOutbox.AsNoTracking().OrderByDescending(x => x.Id).Take(100).ToListAsync(ct);
+            var referencedIncidents = audit.Where(x => x.Entity.Equals("incident", StringComparison.OrdinalIgnoreCase) && x.EntityId != null)
+                .Select(x => x.EntityId!.Value).Concat(outbox.Select(x => x.IncidentId)).Distinct().ToArray();
+            var incidentLabels = await (from incident in db.Incidents.AsNoTracking()
+                join rule in db.AlgorithmRules.AsNoTracking() on incident.AlgorithmRuleId equals rule.Id
+                join monitoredObject in db.Objects.AsNoTracking() on incident.ObjectId equals monitoredObject.Id
+                where referencedIncidents.Contains(incident.Id)
+                select new { incident.Id, AlgorithmName = rule.Name, ObjectName = monitoredObject.Name,
+                    incident.StartedAtUtc }).ToListAsync(ct);
             return Results.Ok(new
             {
                 Chats = await db.Chats.OrderBy(x => x.Id).ToListAsync(ct),
@@ -136,15 +157,19 @@ public static class MiniAppEndpoints
                     .ThenBy(x => x.Name).Select(x => new { x.Id, x.ObjectId, x.CategoryId, x.Name, x.MatchPattern, x.Priority, x.Enabled,
                         Family = AlgorithmCatalog.Family(objects.First(o => o.Id == x.ObjectId).Code) }).ToList(),
                 Routes = await db.RouteRules.OrderBy(x => x.Priority).ToListAsync(ct),
-                Templates = await db.ResponseTemplates.Where(x => x.AlgorithmRuleId != null && canonicalIds.Contains(x.AlgorithmRuleId.Value))
-                    .OrderBy(x => x.SortOrder).ToListAsync(ct),
-                TemplateVersions = await db.TemplateVersions.OrderByDescending(x => x.SavedAtUtc).Take(100).ToListAsync(ct),
+                Templates = templates.Where(x => x.AlgorithmRuleId != null && canonicalIds.Contains(x.AlgorithmRuleId.Value))
+                    .OrderBy(x => x.SortOrder).ToList(),
+                TemplateVersions = versions.Select(version => new { version.Id, version.TemplateId, version.Version,
+                    version.Title, version.Text, version.SavedAtUtc,
+                    AlgorithmName = rules.FirstOrDefault(rule => rule.Id == templates.FirstOrDefault(template => template.Id == version.TemplateId)?.AlgorithmRuleId)?.Name ?? "Алгоритм не знайдено" }).ToList(),
+                Answers = recentAnswers,
+                IncidentLabels = incidentLabels,
                 Users = await db.Users.OrderBy(x => x.Id).ToListAsync(ct),
                 Scopes = await db.UserScopes.ToListAsync(ct),
                 Settings = await db.Settings.ToListAsync(ct),
                 Reviews = await db.IncomingMessages.Where(x => x.Status == "review").OrderByDescending(x => x.Id).Take(100).ToListAsync(ct),
-                Outbox = await db.NotificationOutbox.OrderByDescending(x => x.Id).Take(100).ToListAsync(ct)
-                ,Audit = await db.AuditEvents.OrderByDescending(x => x.Id).Take(100).ToListAsync(ct)
+                Outbox = outbox
+                ,Audit = audit
             });
         });
         api.MapGet("/admin/source-status", async (HttpRequest req, MiniAppAuth auth, AdminSession sessions,
