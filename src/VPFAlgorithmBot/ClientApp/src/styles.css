@@ -17,3 +17,4 @@
 .admin .source-details{margin-top:18px;background:#f8fbfc}.source-details summary{font-weight:700;font-size:16px;cursor:pointer;color:#173c4e}.source-details p{font-size:14px;line-height:1.5;color:#526c78}
 .delete-confirm{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin:16px 0;padding:16px 18px;border:1px solid #e9b8aa;border-radius:12px;background:#fff6f3}.delete-confirm strong{color:#8f3428}.delete-confirm p{margin:5px 0 0;color:#526c78;font-size:14px}.delete-confirm .actions{margin:0}
 .delete-confirm{position:fixed;z-index:1000;top:50%;left:50%;width:min(480px,calc(100vw - 32px));transform:translate(-50%,-50%);box-shadow:0 16px 60px #173c4e40}
+.admin-workspace.single{grid-template-columns:minmax(0,1fr)}.admin-workspace.single .admin-editor>label,.admin-workspace.single .existing-answers{max-width:760px}

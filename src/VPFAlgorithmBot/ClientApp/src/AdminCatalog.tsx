@@ -11,15 +11,15 @@ export const specs:Record<string,[string,string][]>= {
   templates:[['algorithmRuleId','number'],['title','text'],['text','text'],['enabled','bool']],
   scopes:[['userId','number'],['objectId','number']]
 }
-export const labels:Record<string,string>={chats:'Чати — джерела подій',objects:'Об’єкти',algorithms:'Типи алгоритмів',routes:'Відповідальні',templates:'Шаблони відповідей',scopes:'Доступ до об’єктів'}
+export const labels:Record<string,string>={chats:'Чати — джерела подій',objects:'Об’єкти',algorithms:'Типи алгоритмів',routes:'Відповідальні',templates:'Шаблони відповідей',scopes:'Права перегляду об’єктів'}
 export const keyLabels:Record<string,string>={telegramChatId:'Telegram ID чату',senderTelegramId:'Telegram ID бота-відправника',code:'Код об’єкта',name:'Назва',enabled:'Увімкнено',objectId:'Об’єкт',categoryId:'Категорія',userId:'Працівник',chatId:'Чат',priority:'Пріоритет',matchPattern:'Правило розпізнавання',algorithmRuleId:'Тип алгоритму',title:'Назва відповіді',text:'Текст відповіді',sortOrder:'Порядок показу'}
 const id=(x:unknown)=>String(x??'')
 const find=(rows:Row[], value:unknown)=>rows.find(x=>id(x.id)===id(value))
 const name=(rows:Row[], value:unknown, key='name')=>value==null?'':String(find(rows,value)?.[key]??'Невідомий запис')
 const familyOptions=(catalog:Catalog)=>{
   const groups=new Map<string,Row>()
-  for(const object of catalog.objects){const family=String(object.code).replace(/\s+/g,'').replace(/\d+$/,'')||String(object.code);if(!groups.has(family))groups.set(family,object)}
-  return [...groups].map(([family,object])=>({id:id(catalog.algorithms.find(x=>x.family===family)?.objectId??object.id),label:family}))
+  for(const object of catalog.objects.filter(x=>x.enabled)){const family=String(object.code).replace(/\s+/g,'').replace(/\d+$/,'')||String(object.code);if(!groups.has(family))groups.set(family,object)}
+  return [...groups].map(([family,object])=>({id:id(catalog.algorithms.find(x=>x.family===family&&x.enabled&&catalog.objects.some(o=>o.id===x.objectId&&o.enabled))?.objectId??object.id),label:family}))
 }
 const algorithmName=(catalog:Catalog,value:unknown)=>{const rule=find(catalog.algorithms,value);return rule?`${String(rule.name)} · ${String(rule.family)}`:'Невідомий алгоритм'}
 
@@ -27,7 +27,7 @@ export function AdminCatalog({catalog,formType,form,setForm,editId,onSubmit,onEd
   catalog:Catalog,formType:string,form:Record<string,string>,setForm:Dispatch<SetStateAction<Record<string,string>>>,editId:number|null,
   onSubmit:()=>void,onEdit:(row:Row)=>void,onCancel:()=>void,onRemoveScope:(row:Row)=>void,onDelete:(row:Row)=>void
 }){
-  const families=[...new Set(catalog.algorithms.map(x=>String(x.family)))].sort((a,b)=>a.localeCompare(b,'uk'))
+  const families=[...new Set(catalog.algorithms.filter(x=>x.enabled&&catalog.objects.some(o=>o.id===x.objectId&&o.enabled)).map(x=>String(x.family)))].sort((a,b)=>a.localeCompare(b,'uk'))
   const selectedFamily=form.family||String(find(catalog.algorithms,form.algorithmRuleId)?.family??'')
   const selectedUser=id(form.userId)
   const selectedObjects=new Set((form.objectIds||'').split(',').filter(Boolean))
@@ -46,10 +46,10 @@ export function AdminCatalog({catalog,formType,form,setForm,editId,onSubmit,onEd
   const options=(key:string):{id:string,label:string}[]|null=>{
     if(key==='objectId'&&formType==='algorithms')return familyOptions(catalog)
     if(key==='chatId')return catalog.chats.filter(x=>x.enabled).map(x=>({id:id(x.id),label:String(x.name)}))
-    if(key==='objectId')return catalog.objects.map(x=>({id:id(x.id),label:`${String(x.name)} (${String(x.code)})`}))
+    if(key==='objectId')return catalog.objects.filter(x=>x.enabled).map(x=>({id:id(x.id),label:`${String(x.name)} (${String(x.code)})`}))
     if(key==='categoryId')return catalog.categories.map(x=>({id:id(x.id),label:String(x.name)}))
     if(key==='userId')return catalog.users.filter(x=>formType!=='routes'||x.status==='approved').map(x=>({id:id(x.id),label:`${String(x.displayName)} · ${roles[String(x.role)]||String(x.role)}`}))
-    if(key==='algorithmRuleId')return catalog.algorithms.filter(x=>x.enabled && String(x.family)===selectedFamily).map(x=>({id:id(x.id),label:String(x.name)}))
+    if(key==='algorithmRuleId')return catalog.algorithms.filter(x=>x.enabled && String(x.family)===selectedFamily && catalog.objects.some(o=>o.id===x.objectId&&o.enabled)).map(x=>({id:id(x.id),label:String(x.name)}))
     return null
   }
   const optional=(key:string)=>formType==='routes'&&['chatId','objectId','categoryId'].includes(key)
@@ -68,14 +68,15 @@ export function AdminCatalog({catalog,formType,form,setForm,editId,onSubmit,onEd
   }
   const title=(row:Row)=>{
     if(formType==='routes')return name(catalog.users,row.userId,'displayName')
-    if(formType==='scopes')return `${name(catalog.users,row.userId,'displayName')} · ${name(catalog.objects,row.objectId)}`
+    if(formType==='scopes')return `${name(catalog.users,row.userId,'displayName')} · ${name(catalog.objects,row.objectId)}${find(catalog.objects,row.objectId)?.enabled===false?' (архівний об’єкт)':''}`
     if(formType==='algorithms')return `${String(row.name)} · ${String(row.family)}`
     if(formType==='templates')return `${String(row.title)} · ${algorithmName(catalog,row.algorithmRuleId)}`
     return String(row.name??row.code??'Запис')
   }
   const rows=(catalog[formType as keyof Catalog] as Row[]).filter(x=>x.enabled!==false)
-  return <div className="admin-workspace"><div className="panel admin-editor"><h3>{formType==='routes'?'Призначити відповідального':formType==='templates'?'Відповіді на алгоритм':editId?'Редагувати запис':'Додати запис'}</h3>
+  return <div className={`admin-workspace${formType==='templates'?' single':''}`}><div className="panel admin-editor"><h3>{formType==='routes'?'Призначити відповідального':formType==='templates'?'Відповіді на алгоритм':editId?'Редагувати запис':'Додати запис'}</h3>
     {formType==='routes'&&<p className="form-hint">Оберіть працівника та всі об’єкти його відповідальності. Чати лише приймають повідомлення і не впливають на розподіл. Збереження також відкриє працівнику доступ до вибраних об’єктів.</p>}
+    {formType==='scopes'&&<p className="form-hint">Це право бачити алгоритми об’єкта й відповідати на них у Mini App. Сповіщення налаштовуються окремо у «Відповідальних»; при призначенні відповідального право перегляду додається автоматично. Тут можна надати доступ без сповіщень, наприклад керівнику.</p>}
     {formType==='chats'&&<p className="form-hint">Чат є лише джерелом повідомлень. Відповідальних призначають за об’єктами.</p>}
     {formType==='templates'&&<><p className="form-hint">Спочатку оберіть групу об’єктів, потім спільний для цієї групи алгоритм.</p><label>Група об’єктів<select value={selectedFamily} onChange={e=>setForm(x=>({...x,family:e.target.value,algorithmRuleId:'',title:'',text:''}))}><option value="">Оберіть групу</option>{families.map(family=><option key={family} value={family}>{family}</option>)}</select></label></>}
     {specs[formType].map(([key,type])=>{
@@ -92,10 +93,10 @@ export function AdminCatalog({catalog,formType,form,setForm,editId,onSubmit,onEd
     {formType==='routes'&&<><div className="picker-head"><strong>Об’єкти ({selectedObjects.size})</strong><button className="secondary" onClick={()=>setForm(x=>({...x,objectIds:catalog.objects.filter(o=>o.enabled).map(o=>id(o.id)).join(',')}))}>Вибрати всі</button><button className="secondary" onClick={()=>setForm(x=>({...x,objectIds:''}))}>Очистити</button></div><div className="object-picker">{Object.entries(groupedObjects).map(([family,objects])=><fieldset key={family}><legend>{family}</legend>{objects!.map(object=><label className="check-row" key={id(object.id)}><input type="checkbox" checked={selectedObjects.has(id(object.id))} onChange={()=>toggleObject(id(object.id))}/><span>{String(object.name)}</span></label>)}</fieldset>)}</div></>}
     {formType==='templates'&&form.algorithmRuleId&&<div className="existing-answers"><h4>Наявні відповіді ({relatedTemplates.length})</h4>{relatedTemplates.length?relatedTemplates.map(template=><div className="answer-summary" key={id(template.id)}><b>{String(template.title)}</b><p>{String(template.text)}</p><div className="actions"><button className="secondary" onClick={()=>onEdit(template)}>Редагувати</button><button className="danger" onClick={()=>onDelete(template)}>Видалити</button></div></div>):<p>Для цього алгоритму відповідей ще немає.</p>}</div>}
     <div className="actions"><button onClick={onSubmit}>{formType==='routes'?'Зберегти призначення':'Зберегти'}</button>{(editId||formType==='routes'&&selectedUser)&&<button className="secondary" onClick={onCancel}>Новий запис</button>}</div></div>
-    <div className="panel admin-records"><h3>{formType==='routes'?'Призначені працівники':'Поточні записи'}</h3>{formType==='routes'?<div className="records">{responsibleUsers.length===0?<p className="empty">Призначень поки немає.</p>:responsibleUsers.map(({userId,routes})=><div className="record" key={userId}><strong>{name(catalog.users,userId,'displayName')}</strong><p>{routes.filter(x=>x.objectId!=null).map(x=>name(catalog.objects,x.objectId)).join(', ')||'Потрібно вибрати об’єкти: старе правило без об’єкта більше не діє.'}</p><div className="actions"><button onClick={()=>{setForm({userId,objectIds:routes.filter(x=>x.objectId!=null).map(x=>id(x.objectId)).join(',')})}}>Налаштувати</button><button className="danger" onClick={()=>onDelete({userId})}>Прибрати призначення</button></div></div>)}</div>:formType==='templates'?<p className="form-hint">Відповіді для вибраного алгоритму показано у формі ліворуч.</p>:<div className="records">{rows.length===0?<p className="empty">Поки немає записів.</p>:rows.map((row,i)=><div className="record" key={id(row.id??`${row.userId}-${row.objectId}-${i}`)}>
+    {formType!=='templates'&&<div className="panel admin-records"><h3>{formType==='routes'?'Призначені працівники':'Поточні записи'}</h3>{formType==='routes'?<div className="records">{responsibleUsers.length===0?<p className="empty">Призначень поки немає.</p>:responsibleUsers.map(({userId,routes})=><div className="record" key={userId}><strong>{name(catalog.users,userId,'displayName')}</strong><p>{routes.filter(x=>x.objectId!=null).map(x=>name(catalog.objects,x.objectId)).join(', ')||'Потрібно вибрати об’єкти: старе правило без об’єкта більше не діє.'}</p><div className="actions"><button onClick={()=>{setForm({userId,objectIds:routes.filter(x=>x.objectId!=null).map(x=>id(x.objectId)).join(',')})}}>Налаштувати</button><button className="danger" onClick={()=>onDelete({userId})}>Прибрати призначення</button></div></div>)}</div>:<div className="records">{rows.length===0?<p className="empty">Поки немає записів.</p>:rows.map((row,i)=><div className="record" key={id(row.id??`${row.userId}-${row.objectId}-${i}`)}>
       <strong>{title(row)}</strong><div className="record-fields">{specs[formType].filter(([key])=>!['name','title','matchPattern'].includes(key)).map(([key])=><div key={key}><span>{label(key)}</span><b>{value(row,key)}</b></div>)}</div>
       <div className="actions">{formType==='scopes'?<button className="danger" onClick={()=>onRemoveScope(row)}>Прибрати доступ</button>:<><button onClick={()=>onEdit(row)}>Редагувати</button><button className="danger" onClick={()=>onDelete(row)}>Видалити</button></>}</div>
-    </div>)}</div>}</div></div>
+    </div>)}</div>}</div>}</div>
 }
 
 const roles:Record<string,string>={admin:'Адміністратор',operator:'Оператор',viewer:'Перегляд'}

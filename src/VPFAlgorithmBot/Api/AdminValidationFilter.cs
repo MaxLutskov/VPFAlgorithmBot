@@ -108,7 +108,7 @@ public sealed class AdminValidationFilter : IEndpointFilter
                     return "Оберіть спільний тип алгоритму з довідника.";
                 break;
             case UserScope scope:
-                if (!await db.Users.AnyAsync(x => x.Id == scope.UserId, ct) || !await db.Objects.AnyAsync(x => x.Id == scope.ObjectId, ct)) return "Оберіть наявного користувача та об’єкт.";
+                if (!await db.Users.AnyAsync(x => x.Id == scope.UserId, ct) || !await db.Objects.AnyAsync(x => x.Id == scope.ObjectId && x.Enabled, ct)) return "Оберіть наявного користувача та активний об’єкт.";
                 break;
         }
         return null;
