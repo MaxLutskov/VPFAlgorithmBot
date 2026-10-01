@@ -77,10 +77,12 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                 var slot = now.ToUnixTimeSeconds() / Math.Max(60, minutes * 60);
                 var kind = $"reminder:{slot}";
                 if (await db.NotificationOutbox.AnyAsync(x => x.IncidentId == incident.Id && x.UserId == userId && x.Kind == kind, ct)) continue;
+                var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
+                var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
                 db.NotificationOutbox.Add(new NotificationOutbox
                 {
                     IncidentId = incident.Id, UserId = userId, Kind = kind,
-                    Text = $"⏰ Алгоритм №{incident.Id} досі без відповіді. Відповідь можна надати і після завершення.",
+                    Text = $"⏰ {obj?.Name} — {rule?.Name}: досі без відповіді. Відповідь можна надати і після завершення.",
                     DueAtUtc = now
                 });
             }

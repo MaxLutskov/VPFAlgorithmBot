@@ -47,15 +47,43 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         }
         var approved = await db.Users.SingleOrDefaultAsync(x => x.TelegramId == sender.Id && x.Status == "approved", ct);
         if (approved is null) return;
-        if (message.Text.StartsWith("/answer ", StringComparison.OrdinalIgnoreCase))
+        var actionKey = $"message:{message.Chat.Id}:{message.MessageId}";
+        if (await db.Responses.AnyAsync(x => x.ActionKey == actionKey, ct)) return;
+        if (message.Text.StartsWith('/'))
         {
-            var parts = message.Text.Split(' ', 3);
-            if (parts.Length < 3 || !long.TryParse(parts[1], out var id)) return;
-            await incidents.RespondAsync(id, sender.Id, parts[2], null, $"message:{message.Chat.Id}:{message.MessageId}", ct);
-            await SendBestEffortAsync(sender.Id, $"Відповідь на алгоритм №{id} збережено.", null, ct);
+            await SendBestEffortAsync(sender.Id, "Натисніть «Надати відповідь» під повідомленням потрібного алгоритму.", null, ct);
             return;
         }
-        await SendBestEffortAsync(sender.Id, "Щоб надати власну відповідь, надішліть: /answer НОМЕР текст. Або оберіть готову відповідь під повідомленням алгоритму.", null, ct);
+        var pending = await db.PendingCustomAnswers.FindAsync([approved.Id], ct);
+        if (pending is null)
+        {
+            await SendBestEffortAsync(sender.Id, "Спочатку оберіть алгоритм кнопкою «Надати відповідь», потім натисніть «Своя відповідь».", null, ct);
+            return;
+        }
+        if (pending.RequestedAtUtc < DateTimeOffset.UtcNow.AddHours(-24))
+        {
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(sender.Id, "Час для цієї відповіді минув. Оберіть алгоритм знову.", null, ct);
+            return;
+        }
+        try
+        {
+            await incidents.RespondAsync(pending.IncidentId, sender.Id, message.Text, null, actionKey, ct);
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(sender.Id, "Відповідь збережено.", null, ct);
+        }
+        catch (ArgumentException ex)
+        {
+            await SendBestEffortAsync(sender.Id, $"{ex.Message} Напишіть відповідь ще раз.", null, ct);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            db.PendingCustomAnswers.Remove(pending);
+            await db.SaveChangesAsync(ct);
+            await SendBestEffortAsync(sender.Id, "Немає доступу до цього алгоритму. Оберіть інший.", null, ct);
+        }
     }
 
     private async Task HandleCallbackAsync(TelegramCallback callback, CancellationToken ct)
@@ -80,16 +108,43 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         {
             var templates = await db.ResponseTemplates.Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
                 .OrderBy(x => x.SortOrder).ThenBy(x => x.Id).Take(30).ToListAsync(ct);
-            var buttons = templates.Select(x => new[] { new { text = x.Title, callback_data = $"template:{incidentId}:{x.Id}" } }).ToArray();
+            var buttons = templates.Select(x => new[] { new { text = x.Title, callback_data = $"template:{incidentId}:{x.Id}" } })
+                .Append([new { text = "✍️ Своя відповідь", callback_data = $"custom:{incidentId}" }]).ToArray();
+            var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
+            var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
             await AnswerCallbackBestEffortAsync(callback.Id, "Оберіть відповідь", ct);
             await SendBestEffortAsync(callback.From.Id,
-                $"Алгоритм №{incidentId}: оберіть готову відповідь або напишіть /answer {incidentId} текст", new { inline_keyboard = buttons }, ct);
+                $"{obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:", new { inline_keyboard = buttons }, ct);
+        }
+        else if (parts[0] == "custom")
+        {
+            var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
+            if (pending is null) db.PendingCustomAnswers.Add(new PendingCustomAnswer { UserId = user.Id, IncidentId = incidentId, RequestedAtUtc = DateTimeOffset.UtcNow });
+            else { pending.IncidentId = incidentId; pending.RequestedAtUtc = DateTimeOffset.UtcNow; }
+            await db.SaveChangesAsync(ct);
+            var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
+            var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
+            await AnswerCallbackBestEffortAsync(callback.Id, "Напишіть відповідь", ct);
+            await SendBestEffortAsync(callback.From.Id, $"{obj?.Name} — {rule?.Name}\nНапишіть свою відповідь звичайним повідомленням:",
+                new { force_reply = true, input_field_placeholder = "Ваша відповідь" }, ct);
         }
         else if (parts[0] == "template" && parts.Length == 3 && int.TryParse(parts[2], out var templateId))
         {
-            await incidents.RespondAsync(incidentId, callback.From.Id, "", templateId, $"callback:{callback.Id}", ct);
+            try { await incidents.RespondAsync(incidentId, callback.From.Id, "", templateId, $"callback:{callback.Id}", ct); }
+            catch (ArgumentException)
+            {
+                await AnswerCallbackBestEffortAsync(callback.Id, "Ця відповідь уже недоступна. Оберіть іншу.", ct);
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                await AnswerCallbackBestEffortAsync(callback.Id, "Немає доступу до цієї відповіді", ct);
+                return;
+            }
+            var pending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
+            if (pending is not null) { db.PendingCustomAnswers.Remove(pending); await db.SaveChangesAsync(ct); }
             await AnswerCallbackBestEffortAsync(callback.Id, "Відповідь збережено", ct);
-            await SendBestEffortAsync(callback.From.Id, $"Відповідь на алгоритм №{incidentId} збережено.", null, ct);
+            await SendBestEffortAsync(callback.From.Id, "Відповідь збережено.", null, ct);
         }
     }
 

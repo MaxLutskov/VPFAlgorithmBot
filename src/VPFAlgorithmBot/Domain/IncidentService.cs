@@ -132,8 +132,8 @@ public sealed class IncidentService(AlgorithmDbContext db)
             db.NotificationOutbox.Add(new NotificationOutbox
             {
                 IncidentId = incident.Id, UserId = userId, Kind = kind,
-                Text = kind == "problem" ? $"🔴 Алгоритм №{incident.Id}: {obj?.Name} — {rule?.Name}. Надати відповідь можна також після завершення."
-                    : $"🟢 Алгоритм №{incident.Id} завершився. Якщо відповіді ще немає, її можна надати зараз.",
+                Text = kind == "problem" ? $"🔴 {obj?.Name} — {rule?.Name}. Надати відповідь можна також після завершення."
+                    : $"🟢 {obj?.Name} — {rule?.Name}: завершено. Якщо відповіді ще немає, її можна надати зараз.",
                 DueAtUtc = DateTimeOffset.UtcNow
             });
         }

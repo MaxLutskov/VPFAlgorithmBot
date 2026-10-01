@@ -278,6 +278,32 @@ await botUpdates.HandleAsync(new TelegramUpdate { Message = new TelegramMessage
 Check(failingTelegram.Body is not null && !failingTelegram.Body.Contains("reply_markup"),
     "failed private Telegram reply is acknowledged without a webhook retry or null reply_markup");
 
+await using var answerDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("answer-flow-" + Guid.NewGuid()).Options);
+await DemoSeeder.SeedAsync(answerDb);
+var answerService = new IncidentService(answerDb);
+var opened = await answerService.IngestAsync(first);
+var answerId = opened.IncidentId!.Value;
+var recordingTelegram = new RecordingTelegramHandler();
+var answerTelegram = new TelegramClient(new HttpClient(recordingTelegram), telegramConfig);
+var answerUpdates = new BotUpdateService(answerDb, answerService, answerTelegram, telegramConfig, NullLogger<BotUpdateService>.Instance);
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "choose", From = new TelegramUser { Id = 900002 }, Data = $"templates:{answerId}" } }, CancellationToken.None);
+Check(recordingTelegram.Bodies.Any(x => System.Text.Json.JsonDocument.Parse(x).RootElement.GetRawText().Contains("custom:")) &&
+    recordingTelegram.Bodies.All(x => !System.Text.Json.JsonDocument.Parse(x).RootElement.GetProperty("text").GetString()!.Contains($"Алгоритм №{answerId}")),
+    "response choices include custom answer without a visible algorithm number");
+await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
+    { Id = "custom", From = new TelegramUser { Id = 900002 }, Data = $"custom:{answerId}" } }, CancellationToken.None);
+Check(await answerDb.PendingCustomAnswers.AnyAsync(x => x.IncidentId == answerId), "custom answer selection is persisted");
+var resumedUpdates = new BotUpdateService(answerDb, answerService, answerTelegram, telegramConfig, NullLogger<BotUpdateService>.Instance);
+var plainAnswer = new TelegramUpdate { Message = new TelegramMessage
+    { Chat = new TelegramChat { Id = 900002, Type = "private" }, From = new TelegramUser { Id = 900002 },
+      MessageId = 22001, Date = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Text = "Перевірено дозатор, роботу відновлено" } };
+await resumedUpdates.HandleAsync(plainAnswer, CancellationToken.None);
+await resumedUpdates.HandleAsync(plainAnswer, CancellationToken.None);
+Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.Text == "Перевірено дозатор, роботу відновлено") == 1 &&
+    !await answerDb.PendingCustomAnswers.AnyAsync(), "plain custom answer is stored once after service restart");
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }
@@ -285,5 +311,16 @@ sealed class CapturingTelegramHandler : HttpMessageHandler
     {
         Body = await request.Content!.ReadAsStringAsync(cancellationToken);
         return new HttpResponseMessage(HttpStatusCode.BadRequest);
+    }
+}
+
+sealed class RecordingTelegramHandler : HttpMessageHandler
+{
+    public List<string> Bodies { get; } = [];
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+        return new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"ok\":true,\"result\":{}}") };
     }
 }

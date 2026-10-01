@@ -15,6 +15,12 @@ public sealed class UserScope
     public int UserId { get; set; }
     public int ObjectId { get; set; }
 }
+public sealed class PendingCustomAnswer
+{
+    public int UserId { get; set; }
+    public long IncidentId { get; set; }
+    public DateTimeOffset RequestedAtUtc { get; set; }
+}
 public sealed class SourceChat
 {
     public int Id { get; set; }

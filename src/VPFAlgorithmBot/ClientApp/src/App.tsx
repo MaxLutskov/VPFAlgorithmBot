@@ -83,6 +83,14 @@ export default function App(){
         setCatalog(await api<Catalog>('/admin/catalog'));setNotice(`Збережено призначення для ${objectIds.length} об’єктів`)
         return
       }
+      if(formType==='scopes'){
+        const userId=Number(form.userId)
+        if(!userId)throw new Error('Оберіть працівника.')
+        const objectIds=(form.objectIds||'').split(',').filter(Boolean).map(Number)
+        await api(`/admin/scopes/user/${userId}`,'PUT',{objectIds})
+        setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Права перегляду збережено')
+        return
+      }
       spec.forEach(([key,type])=>{
         const value=(form[key]??'').trim()
         if(type==='number'){
@@ -192,8 +200,7 @@ export default function App(){
       <AdminCatalog catalog={catalog} formType={formType} form={form} setForm={setForm} editId={editId} onSubmit={()=>void submit()}
         onEdit={row=>{setEditId(Number(row.id));setForm({...Object.fromEntries(specs[formType].map(([key])=>[key,String(row[key]??'')])),family:formType==='templates'?String(catalog.algorithms.find(x=>x.id===row.algorithmRuleId)?.family??''):''});window.scrollTo({top:0,behavior:'smooth'})}}
         onCancel={()=>{setEditId(null);setForm({})}}
-        onDelete={requestDelete}
-        onRemoveScope={row=>{void (async()=>{try{await api(`/admin/scopes/${row.userId}/${row.objectId}`,'DELETE');setCatalog(await api<Catalog>('/admin/catalog'));setNotice('Доступ прибрано')}catch(e){setNotice(String(e))}})()}} />
+        onDelete={requestDelete} />
       <AdminUsers catalog={catalog} onStatus={(user,status)=>void approve(user,status)} onSave={(user,displayName,role)=>void saveUser(user,displayName,role)} />
       <div className="panel"><h3>Завантажити історію чату за 3 дні</h3><p>У Telegram Desktop відкрийте потрібний чат → «Експортувати історію чату» → формат JSON. Завантажте result.json сюди. Бот обробить лише повідомлення за останні 72 години, а подальші події отримуватиме через webhook.</p><label>Чат<select value={exportChatId} onChange={e=>setExportChatId(e.target.value)} disabled={importing}><option value="">Оберіть чат</option>{catalog.chats.filter(x=>x.enabled).map(x=><option key={String(x.id)} value={String(x.id)}>{String(x.name)}</option>)}</select></label><label>Файл JSON<input type="file" accept=".json,application/json" disabled={importing} onChange={e=>setExportFile(e.target.files?.[0]||null)}/></label><button onClick={()=>void importExport()} disabled={importing} aria-busy={importing}>{importing?<><span className="spinner" aria-hidden="true"/> Імпорт триває…</>:'Завантажити історію'}</button>{importing&&<p className="import-status" role="status" aria-live="polite"><span className="spinner" aria-hidden="true"/> Обробляємо історію чату. Не закривайте вікно; після завершення з’явиться результат імпорту.</p>}</div>
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>

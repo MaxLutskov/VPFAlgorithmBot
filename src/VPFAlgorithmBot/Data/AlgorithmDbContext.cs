@@ -8,6 +8,7 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
     public int? AuditActorUserId { get; set; }
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<UserScope> UserScopes => Set<UserScope>();
+    public DbSet<PendingCustomAnswer> PendingCustomAnswers => Set<PendingCustomAnswer>();
     public DbSet<SourceChat> Chats => Set<SourceChat>();
     public DbSet<MonitoredObject> Objects => Set<MonitoredObject>();
     public DbSet<ProblemCategory> Categories => Set<ProblemCategory>();
@@ -50,6 +51,8 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
         model.HasDefaultSchema(Schema);
         model.Entity<AppUser>().HasIndex(x => x.TelegramId).IsUnique();
         model.Entity<UserScope>().HasKey(x => new { x.UserId, x.ObjectId });
+        model.Entity<PendingCustomAnswer>().HasKey(x => x.UserId);
+        model.Entity<PendingCustomAnswer>().Property(x => x.UserId).ValueGeneratedNever();
         model.Entity<SourceChat>().HasIndex(x => x.TelegramChatId).IsUnique();
         model.Entity<MonitoredObject>().HasIndex(x => x.Code).IsUnique();
         model.Entity<ProblemCategory>().HasIndex(x => x.Name).IsUnique();

@@ -424,9 +424,34 @@ public static class MiniAppEndpoints
             { db.UserScopes.Add(new UserScope { UserId = data.UserId, ObjectId = data.ObjectId }); await db.SaveChangesAsync(ct); }
             return Results.Ok();
         });
+        api.MapPut("/admin/scopes/user/{userId:int}", async (int userId, ScopeEdit data, HttpRequest req,
+            MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            if (!await db.Users.AnyAsync(x => x.Id == userId && x.Status == "approved", ct))
+                return Results.BadRequest("Оберіть підтвердженого працівника.");
+            var requested = data.ObjectIds?.Distinct().ToArray() ?? [];
+            if (await db.Objects.CountAsync(x => requested.Contains(x.Id) && x.Enabled, ct) != requested.Length)
+                return Results.BadRequest("Оберіть активні об’єкти.");
+            return await DatabaseWork.RunAsync(db, async () =>
+            {
+                var required = await db.RouteRules.Where(x => x.UserId == userId && x.Enabled && x.ObjectId != null)
+                    .Select(x => x.ObjectId!.Value).Distinct().ToListAsync(ct);
+                var activeIds = await db.Objects.Where(x => x.Enabled).Select(x => x.Id).ToListAsync(ct);
+                var desired = requested.Concat(required).ToHashSet();
+                var existing = await db.UserScopes.Where(x => x.UserId == userId).ToListAsync(ct);
+                db.UserScopes.RemoveRange(existing.Where(x => activeIds.Contains(x.ObjectId) && !desired.Contains(x.ObjectId)));
+                db.UserScopes.AddRange(desired.Except(existing.Select(x => x.ObjectId))
+                    .Select(objectId => new UserScope { UserId = userId, ObjectId = objectId }));
+                await db.SaveChangesAsync(ct);
+                return Results.Ok(new { ObjectIds = desired });
+            }, ct);
+        });
         api.MapDelete("/admin/scopes/{userId:int}/{objectId:int}", async (int userId, int objectId, HttpRequest req, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            if (await db.RouteRules.AnyAsync(x => x.UserId == userId && x.ObjectId == objectId && x.Enabled, ct))
+                return Results.BadRequest("Для відповідального доступ до об’єкта обов’язковий.");
             var value=await db.UserScopes.FindAsync([userId,objectId],ct);
             if(value is null)return Results.NotFound();
             db.UserScopes.Remove(value);await db.SaveChangesAsync(ct);return Results.Ok();
@@ -474,4 +499,5 @@ public static class MiniAppEndpoints
     private sealed record ResponseEdit(int? TemplateId, string? Text, string? RequestId);
     private sealed record ReminderEdit(int Minutes);
     private sealed record ResponsibilityEdit(int[]? ObjectIds);
+    private sealed record ScopeEdit(int[]? ObjectIds);
 }
