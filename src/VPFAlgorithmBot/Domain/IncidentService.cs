@@ -168,10 +168,12 @@ public sealed class IncidentService(AlgorithmDbContext db)
         }
     }
 
-    public Task<IncidentResponse> RespondAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct = default) =>
-        DatabaseWork.RunAsync(db, () => RespondCoreAsync(incidentId, telegramUserId, text, templateId, actionKey, ct), ct);
+    public Task<IncidentResponse> RespondAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey,
+        CancellationToken ct = default, bool confirmInSourceChat = false) =>
+        DatabaseWork.RunAsync(db, () => RespondCoreAsync(incidentId, telegramUserId, text, templateId, actionKey, confirmInSourceChat, ct), ct);
 
-    private async Task<IncidentResponse> RespondCoreAsync(long incidentId, long telegramUserId, string text, int? templateId, string actionKey, CancellationToken ct)
+    private async Task<IncidentResponse> RespondCoreAsync(long incidentId, long telegramUserId, string text, int? templateId,
+        string actionKey, bool confirmInSourceChat, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text) && templateId is null) throw new ArgumentException("Порожня відповідь");
         var old = await db.Responses.SingleOrDefaultAsync(x => x.ActionKey == actionKey, ct);
@@ -200,6 +202,16 @@ public sealed class IncidentService(AlgorithmDbContext db)
         db.Responses.Add(response);
         db.AuditEvents.Add(new AuditEvent { ActorUserId = user.Id, Action = "respond", Entity = "incident", EntityId = incidentId, CreatedAtUtc = response.CreatedAtUtc });
         await db.SaveChangesAsync(ct);
+        if (confirmInSourceChat)
+        {
+            db.NotificationOutbox.Add(new NotificationOutbox
+            {
+                IncidentId = incidentId, UserId = 0, Kind = $"response_receipt:{response.Id}",
+                Text = $"✅ Відповідь від {user.DisplayName}:\n{response.Text}",
+                DueAtUtc = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync(ct);
+        }
         return response;
     }
 }

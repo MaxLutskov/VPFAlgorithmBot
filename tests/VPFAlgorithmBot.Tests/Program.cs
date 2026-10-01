@@ -4,6 +4,7 @@ using VPFAlgorithmBot.Data;
 using VPFAlgorithmBot.Domain;
 using VPFAlgorithmBot.Telegram;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Net;
 
@@ -385,6 +386,59 @@ await Task.WhenAll(
     new IncidentService(concurrentDb2).RespondAsync(answerId, 900002, "Перевірив оператор 2", null, "concurrent:2"));
 Check(await answerDb.Responses.CountAsync(x => x.IncidentId == answerId && x.ActionKey!.StartsWith("concurrent:")) == 2,
     "simultaneous answers by different users are both preserved");
+var receipts = await answerDb.NotificationOutbox.Where(x => x.IncidentId == answerId && x.Kind.StartsWith("response_receipt:"))
+    .OrderBy(x => x.Id).ToListAsync();
+Check(receipts.Count == 3 && receipts.Any(x => x.Text.Contains("Показники перевірено на місці")) &&
+    receipts.Any(x => x.Text.Contains("Проводиться перевірка показників")),
+    "different group answers each queue their own receipt with the actual answer text");
+await answerTelegram.SendReplyAsync(-1001, first.MessageTelegramId, receipts[0].Text, CancellationToken.None);
+Check(recordingTelegram.Bodies.Any(body =>
+    System.Text.Json.JsonDocument.Parse(body).RootElement.TryGetProperty("reply_parameters", out var reply) &&
+    reply.GetProperty("message_id").GetInt32() == first.MessageTelegramId),
+    "confirmation is sent as a reply to the original algorithm message");
+
+var welcomeOptions = new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("welcome-flow-" + Guid.NewGuid()).Options;
+await using var welcomeDb = new AlgorithmDbContext(welcomeOptions);
+await DemoSeeder.SeedAsync(welcomeDb);
+var welcomeTelegram = new RecordingTelegramHandler();
+var welcomeClient = new TelegramClient(new HttpClient(welcomeTelegram), telegramConfig);
+var welcomeConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    { ["Telegram:BotToken"] = "test-token", ["Telegram:Mode"] = "Webhook" }).Build();
+using var welcomeServices = new ServiceCollection()
+    .AddScoped(_ => new AlgorithmDbContext(welcomeOptions))
+    .AddSingleton(welcomeClient)
+    .BuildServiceProvider();
+var welcomeWorker = new NotificationWorker(welcomeServices.GetRequiredService<IServiceScopeFactory>(),
+    welcomeConfig, NullLogger<NotificationWorker>.Instance);
+await welcomeWorker.StartAsync(CancellationToken.None);
+for (var i = 0; i < 60 && !await welcomeDb.ChatInstructionOutbox.AnyAsync(x => x.Kind == "initial" && x.Status == "sent"); i++)
+    await Task.Delay(50);
+await welcomeWorker.StopAsync(CancellationToken.None);
+Check(await welcomeDb.ChatInstructionOutbox.CountAsync(x => x.Kind == "initial" && x.Status == "sent") == 1 &&
+    welcomeTelegram.Bodies.Count(body =>
+        System.Text.Json.JsonDocument.Parse(body).RootElement.GetProperty("chat_id").GetInt64() == -1001) == 1,
+    "existing configured chat receives the short instruction once");
+var welcomeUpdates = new BotUpdateService(welcomeDb, new IncidentService(welcomeDb), welcomeClient,
+    telegramConfig, NullLogger<BotUpdateService>.Instance);
+var join = System.Text.Json.JsonSerializer.Deserialize<TelegramUpdate>("""
+    {"message":{"message_id":991,"date":1790840000,"chat":{"id":-1001,"type":"supergroup"},
+    "new_chat_members":[{"id":900050,"first_name":"Новий працівник","is_bot":false}]}}
+    """)!;
+await welcomeUpdates.HandleAsync(join, CancellationToken.None);
+await welcomeUpdates.HandleAsync(join, CancellationToken.None);
+Check(await welcomeDb.ChatInstructionOutbox.CountAsync(x => x.Kind == "member_join" && x.EventMessageId == 991) == 1,
+    "new member event queues one instruction even when Telegram retries it");
+var joinWorker = new NotificationWorker(welcomeServices.GetRequiredService<IServiceScopeFactory>(),
+    welcomeConfig, NullLogger<NotificationWorker>.Instance);
+await joinWorker.StartAsync(CancellationToken.None);
+for (var i = 0; i < 60 && !await welcomeDb.ChatInstructionOutbox.AnyAsync(x => x.Kind == "member_join" && x.Status == "sent"); i++)
+    await Task.Delay(50);
+await joinWorker.StopAsync(CancellationToken.None);
+Check(await welcomeDb.ChatInstructionOutbox.CountAsync(x => x.Kind == "member_join" && x.Status == "sent") == 1 &&
+    welcomeTelegram.Bodies.Count(body =>
+        System.Text.Json.JsonDocument.Parse(body).RootElement.GetProperty("chat_id").GetInt64() == -1001) == 2,
+    "new member instruction is delivered and initial one is not repeated");
 
 await using var accessDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("access-request-" + Guid.NewGuid()).Options);

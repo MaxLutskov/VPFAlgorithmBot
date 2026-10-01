@@ -15,7 +15,14 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             return;
         }
         var message = update.Message ?? update.ChannelPost;
-        if (message is null || string.IsNullOrWhiteSpace(message.Text)) return;
+        if (message is null) return;
+        if (message.Chat.Type != "private" && message.NewChatMembers is { Count: > 0 })
+        {
+            if (message.NewChatMembers.Any(x => !x.IsBot))
+                await QueueJoinInstructionsAsync(message, ct);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(message.Text)) return;
         var sender = message.From;
         if (message.Chat.Type != "private")
         {
@@ -104,6 +111,20 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         }
     }
 
+    private Task<int> QueueJoinInstructionsAsync(TelegramMessage message, CancellationToken ct) =>
+        DatabaseWork.RunAsync(db, async () =>
+        {
+            var chat = await db.Chats.SingleOrDefaultAsync(x => x.TelegramChatId == message.Chat.Id && x.Enabled, ct);
+            if (chat is null || await db.ChatInstructionOutbox.AnyAsync(x => x.ChatId == chat.Id &&
+                    x.Kind == "member_join" && x.EventMessageId == message.MessageId, ct)) return 0;
+            db.ChatInstructionOutbox.Add(new ChatInstructionOutbox
+            {
+                ChatId = chat.Id, Kind = "member_join", EventMessageId = message.MessageId,
+                DueAtUtc = DateTimeOffset.UtcNow
+            });
+            return await db.SaveChangesAsync(ct);
+        }, ct);
+
     private async Task<bool> HandleGroupCustomReplyAsync(TelegramMessage message, CancellationToken ct)
     {
         if (message.From is null || message.ReplyToMessage is null || string.IsNullOrWhiteSpace(message.Text)) return false;
@@ -122,10 +143,9 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         try
         {
             await incidents.RespondAsync(pending.IncidentId, message.From.Id, message.Text, null,
-                $"message:{message.Chat.Id}:{message.MessageId}", ct);
+                $"message:{message.Chat.Id}:{message.MessageId}", ct, confirmInSourceChat: true);
             db.PendingCustomAnswers.Remove(pending);
             await db.SaveChangesAsync(ct);
-            await SendBestEffortAsync(message.Chat.Id, $"✅ {user.DisplayName}: відповідь збережено.", null, ct);
         }
         catch (ArgumentException ex)
         {
@@ -229,7 +249,8 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
         }
         else if (parts[0] == "template" && parts.Length == 3 && int.TryParse(parts[2], out var templateId))
         {
-            try { await incidents.RespondAsync(incidentId, callback.From.Id, "", templateId, $"callback:{callback.Id}", ct); }
+            try { await incidents.RespondAsync(incidentId, callback.From.Id, "", templateId, $"callback:{callback.Id}", ct,
+                confirmInSourceChat: groupChat is not null); }
             catch (ArgumentException)
             {
                 await AnswerCallbackBestEffortAsync(callback.Id, "Ця відповідь уже недоступна. Оберіть іншу.", ct);
@@ -244,7 +265,6 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             if (pending is not null) { db.PendingCustomAnswers.Remove(pending); await db.SaveChangesAsync(ct); }
             await AnswerCallbackBestEffortAsync(callback.Id, "Відповідь збережено", ct);
             if (groupChat is null) await SendBestEffortAsync(callback.From.Id, "Відповідь збережено.", null, ct);
-            else await SendBestEffortAsync(groupChat.Id, $"✅ {user.DisplayName}: відповідь збережено.", null, ct);
         }
     }
 

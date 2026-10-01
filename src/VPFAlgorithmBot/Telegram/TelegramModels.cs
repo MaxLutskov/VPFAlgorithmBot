@@ -18,6 +18,7 @@ public sealed class TelegramMessage
     [JsonPropertyName("sender_chat")] public TelegramChat? SenderChat { get; set; }
     [JsonPropertyName("text")] public string? Text { get; set; }
     [JsonPropertyName("reply_to_message")] public TelegramMessage? ReplyToMessage { get; set; }
+    [JsonPropertyName("new_chat_members")] public List<TelegramUser>? NewChatMembers { get; set; }
 }
 public sealed class TelegramChat
 {
@@ -30,6 +31,7 @@ public sealed class TelegramUser
     [JsonPropertyName("username")] public string? Username { get; set; }
     [JsonPropertyName("first_name")] public string FirstName { get; set; } = "";
     [JsonPropertyName("last_name")] public string? LastName { get; set; }
+    [JsonPropertyName("is_bot")] public bool IsBot { get; set; }
     public string DisplayName => string.Join(' ', new[] { FirstName, LastName }.Where(x => !string.IsNullOrWhiteSpace(x)));
 }
 public sealed class TelegramCallback

@@ -190,8 +190,16 @@ public static class MiniAppEndpoints
                         x.SenderTelegramId, x.Status, x.ParseError }).FirstOrDefaultAsync(ct);
                 var lastLive = await db.IncomingMessages.AsNoTracking().Where(x => x.ChatId == chat.Id && x.Status == "processed")
                     .MaxAsync(x => (DateTimeOffset?)x.ReceivedAtUtc, ct);
+                var instruction = await db.ChatInstructionOutbox.AsNoTracking()
+                    .Where(x => x.ChatId == chat.Id && x.Kind == "initial")
+                    .Select(x => new { x.Status, x.SentAtUtc, x.LastError }).FirstOrDefaultAsync(ct);
+                var lastJoinInstruction = await db.ChatInstructionOutbox.AsNoTracking()
+                    .Where(x => x.ChatId == chat.Id && x.Kind == "member_join")
+                    .OrderByDescending(x => x.Id)
+                    .Select(x => new { x.Status, x.SentAtUtc, x.LastError }).FirstOrDefaultAsync(ct);
                 status.Add(new { chat.Id, chat.Name, chat.Enabled, chat.TelegramChatId, chat.SenderTelegramId,
                     LastMessage = last, LastProcessedLiveAtUtc = lastLive,
+                    Instruction = instruction, LastJoinInstruction = lastJoinInstruction,
                     Incidents = await db.Incidents.CountAsync(x => x.ChatId == chat.Id, ct),
                     Active = await db.Incidents.CountAsync(x => x.ChatId == chat.Id && x.EndedAtUtc == null, ct) });
             }

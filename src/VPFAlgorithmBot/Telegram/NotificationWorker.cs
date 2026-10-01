@@ -14,12 +14,14 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var db = scope.ServiceProvider.GetRequiredService<AlgorithmDbContext>();
                 var telegram = scope.ServiceProvider.GetRequiredService<TelegramClient>();
+                await QueueInitialChatInstructionsAsync(db, stoppingToken);
+                await DeliverChatInstructionsAsync(db, telegram, stoppingToken);
                 await ScheduleRemindersAsync(db, stoppingToken);
                 var due = await db.NotificationOutbox.Where(x => x.Status == "pending" && x.DueAtUtc <= DateTimeOffset.UtcNow)
                     .OrderBy(x => x.Id).Take(20).ToListAsync(stoppingToken);
                 foreach (var item in due)
                 {
-                    if (item.Kind == "chat_prompt")
+                    if (item.Kind == "chat_prompt" || item.Kind.StartsWith("response_receipt:", StringComparison.Ordinal))
                     {
                         try
                         {
@@ -29,7 +31,7 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                             {
                                 item.Status = "failed"; item.LastError = "Чат недоступний"; continue;
                             }
-                            if (config["Telegram:Mode"] != "Demo")
+                            if (config["Telegram:Mode"] != "Demo" && item.Kind == "chat_prompt")
                             {
                                 var obj = await db.Objects.FindAsync([incident!.ObjectId], stoppingToken);
                                 var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], stoppingToken);
@@ -40,6 +42,12 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                                     $"🔴 {obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:",
                                     ResponseKeyboard.Build(incident.Id, templates), stoppingToken);
                             }
+                            else if (config["Telegram:Mode"] != "Demo")
+                            {
+                                var source = await db.IncomingMessages.FindAsync([incident!.StartMessageId], stoppingToken);
+                                if (source is null) throw new InvalidOperationException("Початкове повідомлення алгоритму не знайдено");
+                                await telegram.SendReplyAsync(chat.TelegramChatId, source.TelegramMessageId, item.Text, stoppingToken);
+                            }
                             item.Status = "sent"; item.SentAtUtc = DateTimeOffset.UtcNow;
                         }
                         catch (Exception ex)
@@ -48,7 +56,7 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                             item.LastError = ex.Message[..Math.Min(300, ex.Message.Length)];
                             item.Status = item.Attempts >= 8 ? "failed" : "pending";
                             item.DueAtUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Min(3600, 30 * Math.Pow(2, item.Attempts)));
-                            logger.LogWarning(ex, "Помилка доставки варіантів у чат {OutboxId}", item.Id);
+                            logger.LogWarning(ex, "Помилка доставки повідомлення у чат {OutboxId}", item.Id);
                         }
                         continue;
                     }
@@ -89,6 +97,51 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
             catch (Exception ex) { logger.LogError(ex, "Помилка обробки outbox"); }
             await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
+    }
+
+    private static async Task QueueInitialChatInstructionsAsync(AlgorithmDbContext db, CancellationToken ct)
+    {
+        var chatIds = await db.Chats.AsNoTracking().Where(x => x.Enabled).Select(x => x.Id).ToListAsync(ct);
+        var queuedIds = await db.ChatInstructionOutbox.AsNoTracking().Where(x => x.Kind == "initial")
+            .Select(x => x.ChatId).ToListAsync(ct);
+        foreach (var chatId in chatIds.Except(queuedIds))
+            db.ChatInstructionOutbox.Add(new ChatInstructionOutbox
+            {
+                ChatId = chatId, Kind = "initial", EventMessageId = 0, DueAtUtc = DateTimeOffset.UtcNow
+            });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task DeliverChatInstructionsAsync(AlgorithmDbContext db, TelegramClient telegram, CancellationToken ct)
+    {
+        var due = await db.ChatInstructionOutbox.Where(x => x.Status == "pending" && x.DueAtUtc <= DateTimeOffset.UtcNow)
+            .OrderBy(x => x.Id).Take(20).ToListAsync(ct);
+        foreach (var item in due)
+        {
+            var chat = await db.Chats.FindAsync([item.ChatId], ct);
+            if (chat is null || !chat.Enabled)
+            {
+                item.Status = "failed"; item.LastError = "Чат недоступний"; continue;
+            }
+            try
+            {
+                if (config["Telegram:Mode"] != "Demo")
+                    await telegram.SendAsync(chat.TelegramChatId, ChatInstructions.Text, null, ct);
+                item.Status = "sent";
+                item.SentAtUtc = DateTimeOffset.UtcNow;
+                item.LastError = null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                item.Attempts++;
+                item.LastError = ex.Message[..Math.Min(300, ex.Message.Length)];
+                item.Status = item.Attempts >= 8 ? "failed" : "pending";
+                item.DueAtUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Min(3600, 30 * Math.Pow(2, item.Attempts)));
+                logger.LogWarning(ex, "Помилка доставки інструкції в чат {ChatId}", item.ChatId);
+            }
+        }
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task ScheduleRemindersAsync(AlgorithmDbContext db, CancellationToken ct)

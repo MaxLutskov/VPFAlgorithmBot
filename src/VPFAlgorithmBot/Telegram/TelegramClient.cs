@@ -24,6 +24,9 @@ public sealed class TelegramClient(HttpClient http, IConfiguration config)
         markup is null
             ? CallAsync("sendMessage", new { chat_id = chatId, text }, ct)
             : CallAsync("sendMessage", new { chat_id = chatId, text, reply_markup = markup }, ct);
+    public Task<JsonElement> SendReplyAsync(long chatId, int messageId, string text, CancellationToken ct) =>
+        CallAsync("sendMessage", new { chat_id = chatId, text,
+            reply_parameters = new { message_id = messageId, allow_sending_without_reply = true } }, ct);
     public Task<JsonElement> AnswerCallbackAsync(string id, string text, CancellationToken ct) =>
         CallAsync("answerCallbackQuery", new { callback_query_id = id, text }, ct);
     public Task<JsonElement> DeleteWebhookAsync(CancellationToken ct) =>

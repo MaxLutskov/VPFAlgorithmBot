@@ -138,6 +138,18 @@ public sealed class NotificationOutbox
     public DateTimeOffset? SentAtUtc { get; set; }
     public string? LastError { get; set; }
 }
+public sealed class ChatInstructionOutbox
+{
+    public long Id { get; set; }
+    public int ChatId { get; set; }
+    public string Kind { get; set; } = "initial";
+    public int EventMessageId { get; set; }
+    public string Status { get; set; } = "pending";
+    public int Attempts { get; set; }
+    public DateTimeOffset DueAtUtc { get; set; }
+    public DateTimeOffset? SentAtUtc { get; set; }
+    public string? LastError { get; set; }
+}
 public sealed class AuditEvent
 {
     public long Id { get; set; }
