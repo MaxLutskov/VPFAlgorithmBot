@@ -51,6 +51,8 @@ public static class AlgorithmCatalog
         var map = CanonicalIds(rules, objects);
         var matches = rules.Where(x => RuleName(x.Name).Equals(description.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length == 0) matches = rules.Where(x => EventParser.Matches(x, text)).ToArray();
+        if (matches.Length == 0 && AlgorithmNameMatcher.Find(description.Name, rules.Where(x => map[x.Id] == x.Id)) is { } close)
+            matches = [close];
         var canonicalIds = matches.Select(x => map[x.Id]).Distinct().ToHashSet();
         var candidates = rules.Where(x => canonicalIds.Contains(x.Id) && x.Enabled).OrderBy(x => x.Priority).ThenBy(x => x.Id).ToArray();
         if (candidates.Length == 0) throw new FormatException("Немає правила розпізнавання.");
@@ -77,6 +79,8 @@ public static class AlgorithmCatalog
         var canonical = CanonicalIds(rules, objects);
         var sameName = rules.Where(x => RuleName(x.Name).Equals(description.Name, StringComparison.OrdinalIgnoreCase)).ToList();
         var matches = sameName.Count > 0 ? sameName : rules.Where(x => EventParser.Matches(x, text)).ToList();
+        if (matches.Count == 0 && AlgorithmNameMatcher.Find(description.Name, rules.Where(x => canonical[x.Id] == x.Id)) is { } close)
+            matches.Add(close);
         if (matches.Any())
         {
             var distinct = matches.Select(x => canonical[x.Id]).Distinct().ToArray();

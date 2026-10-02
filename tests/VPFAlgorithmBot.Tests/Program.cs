@@ -458,6 +458,42 @@ Check(accessTelegram.Bodies.Count(body =>
     System.Text.Json.JsonDocument.Parse(body).RootElement.GetProperty("chat_id").GetInt64() == 900001) == 1,
     "new access request notifies the administrator only once");
 
+await using var waterDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("water-catalog-" + Guid.NewGuid()).Options);
+await waterDb.Database.EnsureCreatedAsync();
+var waterObject = new MonitoredObject { Code = "РЧВ7", Name = "РЧВ 7" };
+var waterCategory = new ProblemCategory { Name = "Без категорії" };
+waterDb.Objects.Add(waterObject);
+waterDb.Categories.Add(waterCategory);
+await waterDb.SaveChangesAsync();
+var existingWaterRule = new AlgorithmRule { ObjectId = waterObject.Id, CategoryId = waterCategory.Id,
+    Name = "Засувка №1 знаходиться у ручному режимі протягом 45 хв", MatchPattern = "legacy" };
+waterDb.AlgorithmRules.Add(existingWaterRule);
+await waterDb.SaveChangesAsync();
+await AlgorithmCatalog.AddTestTemplatesAsync(waterDb, existingWaterRule);
+waterDb.ResponseTemplates.Add(new ResponseTemplate { AlgorithmRuleId = existingWaterRule.Id,
+    Title = "Колишня власна відповідь", Text = "Цього варіанта немає у файлі" });
+await waterDb.SaveChangesAsync();
+var waterReport = await WaterWorkbookSeed.ApplyAsync(waterDb);
+Console.WriteLine("WATER RECONCILIATION " + waterReport);
+Check(System.Text.Json.JsonDocument.Parse(waterReport).RootElement.GetProperty("Rows").GetInt32() == 69 &&
+    await waterDb.AlgorithmRules.CountAsync(x => x.Name.Contains("Засувка №1 знаходиться у ручному режимі")) == 1 &&
+    await waterDb.ResponseTemplates.AnyAsync(x => x.AlgorithmRuleId == existingWaterRule.Id && x.Text == "Несправний перемикач") &&
+    await waterDb.ResponseTemplates.CountAsync(x => x.AlgorithmRuleId == existingWaterRule.Id && x.Enabled) == 3,
+    "water workbook matches the existing duration variant and activates only file answers");
+Check(!await waterDb.ResponseTemplates.AnyAsync(x => x.AlgorithmRuleId == existingWaterRule.Id && x.Enabled &&
+    x.Text == "Цього варіанта немає у файлі"), "previous custom answers outside the workbook are disabled");
+Check(await waterDb.AlgorithmRules.CountAsync(x => x.Name.Contains("споживання води по") && x.ObjectId == waterObject.Id) == 2,
+    "input and output water meter conditions remain separate algorithms");
+var waterRuleCount = await waterDb.AlgorithmRules.CountAsync();
+var waterTemplateCount = await waterDb.ResponseTemplates.CountAsync();
+Check(await waterDb.AlgorithmRules.CountAsync(x => x.Name.Contains("Відсутній зв'язок з ПЛК") && x.ObjectId == waterObject.Id) == 1,
+    "20-minute and one-hour PLC delay map to one water-supply algorithm");
+await WaterWorkbookSeed.ApplyAsync(waterDb);
+Check(await waterDb.AlgorithmRules.CountAsync() == waterRuleCount &&
+    await waterDb.ResponseTemplates.CountAsync() == waterTemplateCount,
+    "restarting the workbook import does not add duplicate rules or answers");
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }
