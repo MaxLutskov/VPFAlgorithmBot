@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using VPFAlgorithmBot.Data;
 
@@ -11,9 +12,11 @@ using VPFAlgorithmBot.Data;
 namespace VPFAlgorithmBot.Data.Migrations
 {
     [DbContext(typeof(AlgorithmDbContext))]
-    partial class AlgorithmDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261009070918_DailyDigests")]
+    partial class DailyDigests
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

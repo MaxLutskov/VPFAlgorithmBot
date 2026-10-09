@@ -7,6 +7,7 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        DateTimeOffset lastDigestCheck = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -17,6 +18,13 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                 await QueueInitialChatInstructionsAsync(db, stoppingToken);
                 await DeliverChatInstructionsAsync(db, telegram, stoppingToken);
                 await ScheduleRemindersAsync(db, stoppingToken);
+                if (DateTimeOffset.UtcNow - lastDigestCheck >= TimeSpan.FromMinutes(1))
+                {
+                    await DailyDigestService.QueueDueAsync(db, DateTimeOffset.UtcNow, stoppingToken);
+                    lastDigestCheck = DateTimeOffset.UtcNow;
+                }
+                await DailyDigestService.DeliverDueAsync(db, telegram, config["Telegram:Mode"] == "Demo",
+                    DateTimeOffset.UtcNow, logger, stoppingToken);
                 var due = await db.NotificationOutbox.Where(x => x.Status == "pending" && x.DueAtUtc <= DateTimeOffset.UtcNow)
                     .OrderBy(x => x.Id).Take(20).ToListAsync(stoppingToken);
                 foreach (var item in due)

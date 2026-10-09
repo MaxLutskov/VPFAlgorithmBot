@@ -494,6 +494,73 @@ Check(await waterDb.AlgorithmRules.CountAsync() == waterRuleCount &&
     await waterDb.ResponseTemplates.CountAsync() == waterTemplateCount,
     "restarting the workbook import does not add duplicate rules or answers");
 
+await using var digestDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("daily-digest-" + Guid.NewGuid()).Options);
+await digestDb.Database.EnsureCreatedAsync();
+var digestVfs = new MonitoredObject { Code = "ВФС", Name = "ВФС" };
+var digestNs = new MonitoredObject { Code = "НС1", Name = "НС 1" };
+var digestRchv = new MonitoredObject { Code = "РЧВ7", Name = "РЧВ 7" };
+var digestChatVfs = new SourceChat { TelegramChatId = -5001, Name = "Алгоритми ВФС" };
+var digestChatVdv = new SourceChat { TelegramChatId = -5002, Name = "Алгоритми ВДВП" };
+var digestCategory = new ProblemCategory { Name = "Без категорії" };
+digestDb.AddRange(digestVfs, digestNs, digestRchv, digestChatVfs, digestChatVdv, digestCategory);
+await digestDb.SaveChangesAsync();
+var digestVfsRule = new AlgorithmRule { ObjectId = digestVfs.Id, CategoryId = digestCategory.Id, Name = "Низький хлор", MatchPattern = "test" };
+var digestNsRule = new AlgorithmRule { ObjectId = digestNs.Id, CategoryId = digestCategory.Id, Name = "Тиск насоса", MatchPattern = "test" };
+var digestRchvRule = new AlgorithmRule { ObjectId = digestRchv.Id, CategoryId = digestCategory.Id, Name = "Засувка в ручному режимі", MatchPattern = "test" };
+digestDb.AlgorithmRules.AddRange(digestVfsRule, digestNsRule, digestRchvRule);
+await digestDb.SaveChangesAsync();
+var digestStart = new DateTimeOffset(2026, 10, 9, 9, 0, 0, TimeSpan.Zero);
+var digestMessages = Enumerable.Range(1, 3).Select(i => new IncomingMessage { ChatId = digestChatVfs.Id,
+    TelegramMessageId = i, TelegramDateUtc = digestStart, ReceivedAtUtc = digestStart, Text = "test" }).ToArray();
+digestDb.IncomingMessages.AddRange(digestMessages);
+await digestDb.SaveChangesAsync();
+var digestIncidents = new[]
+{
+    new Incident { ChatId = digestChatVfs.Id, ObjectId = digestVfs.Id, CategoryId = digestCategory.Id,
+        AlgorithmRuleId = digestVfsRule.Id, StartMessageId = digestMessages[0].Id, StartedAtUtc = digestStart },
+    new Incident { ChatId = digestChatVfs.Id, ObjectId = digestNs.Id, CategoryId = digestCategory.Id,
+        AlgorithmRuleId = digestNsRule.Id, StartMessageId = digestMessages[1].Id, StartedAtUtc = digestStart },
+    new Incident { ChatId = digestChatVfs.Id, ObjectId = digestRchv.Id, CategoryId = digestCategory.Id,
+        AlgorithmRuleId = digestRchvRule.Id, StartMessageId = digestMessages[2].Id, StartedAtUtc = digestStart }
+};
+digestDb.Incidents.AddRange(digestIncidents);
+await digestDb.SaveChangesAsync();
+Check(await DailyDigestService.AddInitialSchedulesAsync(digestDb) == 2 &&
+    await DailyDigestService.AddInitialSchedulesAsync(digestDb) == 0,
+    "two requested chat schedules are initialized once at 16:00 Kyiv time");
+var digestBefore = new DateTimeOffset(2026, 10, 9, 12, 59, 0, TimeSpan.Zero);
+var digestAt = digestBefore.AddMinutes(1);
+Check(await DailyDigestService.QueueDueAsync(digestDb, digestBefore) == 0 &&
+    await DailyDigestService.QueueDueAsync(digestDb, digestAt) == 2 &&
+    await DailyDigestService.QueueDueAsync(digestDb, digestAt.AddMinutes(5)) == 0,
+    "daily digest queues once per chat and Kyiv calendar day");
+var digestScheduled = await digestDb.DailyDigestDeliveries.OrderBy(x => x.Id).ToListAsync();
+var vfsDigest = digestScheduled.Single(x => x.ScheduleId == digestDb.DailyDigestSchedules.Single(s => s.ChatId == digestChatVfs.Id).Id);
+var vdvDigest = digestScheduled.Single(x => x.ScheduleId == digestDb.DailyDigestSchedules.Single(s => s.ChatId == digestChatVdv.Id).Id);
+Check(vfsDigest.Text.Contains("Низький хлор") && vfsDigest.Text.Contains("Тиск насоса") &&
+    !vfsDigest.Text.Contains("Засувка в ручному режимі") && vdvDigest.Text.Contains("Засувка в ручному режимі") &&
+    !vdvDigest.Text.Contains("Низький хлор"),
+    "each chat receives only active unanswered algorithms for its selected objects, regardless of source chat");
+var digestTelegramHandler = new RecordingTelegramHandler();
+var digestTelegram = new TelegramClient(new HttpClient(digestTelegramHandler), telegramConfig);
+await DailyDigestService.DeliverDueAsync(digestDb, digestTelegram, false, digestAt,
+    NullLogger<NotificationWorker>.Instance);
+Check(await digestDb.DailyDigestDeliveries.CountAsync(x => x.Status == "sent") == 2 &&
+    digestTelegramHandler.Bodies.Count == 2,
+    "daily summaries are sent once to both configured Telegram chats");
+digestIncidents[0].EndedAtUtc = digestAt;
+digestDb.Responses.Add(new IncidentResponse { IncidentId = digestIncidents[1].Id, UserId = 1,
+    Text = "Відповідь", CreatedAtUtc = digestAt });
+await digestDb.SaveChangesAsync();
+Check(await DailyDigestService.QueueDueAsync(digestDb, digestAt.AddDays(1)) == 2 &&
+    (await digestDb.DailyDigestDeliveries.Where(x => x.LocalDate == "2026-10-10" && x.ScheduleId == vfsDigest.ScheduleId)
+        .SingleAsync()).Text.Contains("Наразі таких алгоритмів немає"),
+    "completed or answered algorithms disappear from the following day's digest");
+Check(await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 11, 9, 13, 59, 0, TimeSpan.Zero)) == 0 &&
+    await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 11, 9, 14, 0, 0, TimeSpan.Zero)) == 2,
+    "Kyiv winter time still sends at local 16:00");
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }

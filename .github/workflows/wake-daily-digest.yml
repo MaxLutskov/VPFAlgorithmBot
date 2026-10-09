@@ -1,0 +1,14 @@
+name: Wake daily digest
+
+on:
+  schedule:
+    # 16:00 in Kyiv is 13:00 UTC in summer and 14:00 UTC in winter.
+    - cron: '0 13,14 * * *'
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake bot for Kyiv daily digest
+        run: curl --fail --show-error --silent --retry 6 --retry-delay 10 --retry-all-errors --max-time 30 'https://vpfalgorithmbot-c6dshneadtdgenhw.westeurope-01.azurewebsites.net/health'

@@ -21,6 +21,8 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
     public DbSet<IncidentResponse> Responses => Set<IncidentResponse>();
     public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
     public DbSet<ChatInstructionOutbox> ChatInstructionOutbox => Set<ChatInstructionOutbox>();
+    public DbSet<DailyDigestSchedule> DailyDigestSchedules => Set<DailyDigestSchedule>();
+    public DbSet<DailyDigestDelivery> DailyDigestDeliveries => Set<DailyDigestDelivery>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<Setting> Settings => Set<Setting>();
 
@@ -63,6 +65,11 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
         model.Entity<IncidentResponse>().HasIndex(x => x.ActionKey).IsUnique().HasFilter("[ActionKey] IS NOT NULL");
         model.Entity<NotificationOutbox>().HasIndex(x => new { x.IncidentId, x.UserId, x.Kind }).IsUnique();
         model.Entity<ChatInstructionOutbox>().HasIndex(x => new { x.ChatId, x.Kind, x.EventMessageId }).IsUnique();
+        model.Entity<DailyDigestSchedule>().HasIndex(x => x.ChatId).IsUnique();
+        model.Entity<DailyDigestSchedule>().Property(x => x.LocalTime).HasMaxLength(5);
+        model.Entity<DailyDigestDelivery>().HasIndex(x => new { x.ScheduleId, x.LocalDate, x.Part }).IsUnique();
+        model.Entity<DailyDigestDelivery>().Property(x => x.LocalDate).HasMaxLength(10);
+        model.Entity<DailyDigestDelivery>().Property(x => x.Text).HasMaxLength(3900);
         model.Entity<Setting>().HasKey(x => x.Key);
         model.Entity<Incident>().Ignore(x => x.ProblemState).Ignore(x => x.AnswerState);
         model.Entity<Incident>().HasMany(x => x.Responses).WithOne().HasForeignKey(x => x.IncidentId);

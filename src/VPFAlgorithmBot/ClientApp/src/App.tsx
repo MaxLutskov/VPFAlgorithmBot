@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { readApiResponse } from './apiResponse'
 import { AdminCatalog, AdminUsers, AdminLogs, keyLabels, labels, specs, type Catalog } from './AdminCatalog'
+import { DigestSettings } from './DigestSettings'
 
 declare global { interface Window { Telegram?: { WebApp?: { initData?: string, ready: () => void, expand: () => void } } } }
 type Incident = { id:number, chatId:number, objectId:number, categoryId:number, algorithmRuleId:number, startedAtUtc:string, endedAtUtc:string|null, problemState:string, answerState:string, firstResponseAtUtc:string|null, responseCount:number, quality:string }
@@ -82,6 +83,16 @@ export default function App(){
   },[me?.role,tab])
 
   async function unlock(){try{const result=await api<{token:string}>('/admin/signin','POST',{password});adminToken=result.token;sessionStorage.setItem('vpfAdminToken',adminToken);const c=await api<Catalog>('/admin/catalog');setCatalog(c);setReminder(c.settings.find(x=>x.key==='reminder_minutes')?.value||'0');setNotice('Адміністративний доступ відкрито')}catch(e){setNotice(String(e))}}
+  async function saveDigest(chatId:number,localTime:string,objectIds:number[]){
+    await api(`/admin/digests/${chatId}`,'PUT',{localTime,objectIds})
+    setCatalog(await api<Catalog>('/admin/catalog'))
+    setNotice('Щоденну розсилку збережено')
+  }
+  async function disableDigest(chatId:number){
+    await api(`/admin/digests/${chatId}`,'DELETE')
+    setCatalog(await api<Catalog>('/admin/catalog'))
+    setNotice('Розсилку вимкнено')
+  }
   async function submit(){
     const spec=specs[formType];if(!spec)return
     const body:Record<string,unknown>={}
@@ -214,6 +225,7 @@ export default function App(){
         onCancel={()=>{setEditId(null);setForm({})}}
         onDelete={requestDelete} />
       <AdminUsers catalog={catalog} onStatus={(user,status)=>void approve(user,status)} onSave={(user,displayName,role)=>void saveUser(user,displayName,role)} />
+      <DigestSettings catalog={catalog} onSave={saveDigest} onDisable={disableDigest}/>
       <div className="panel"><h3>Завантажити історію чату за 3 дні</h3><p>У Telegram Desktop відкрийте потрібний чат → «Експортувати історію чату» → формат JSON. Завантажте result.json сюди. Бот обробить лише повідомлення за останні 72 години, а подальші події отримуватиме через webhook.</p><label>Чат<select value={exportChatId} onChange={e=>setExportChatId(e.target.value)} disabled={importing}><option value="">Оберіть чат</option>{catalog.chats.filter(x=>x.enabled).map(x=><option key={String(x.id)} value={String(x.id)}>{String(x.name)}</option>)}</select></label><label>Файл JSON<input type="file" accept=".json,application/json" disabled={importing} onChange={e=>setExportFile(e.target.files?.[0]||null)}/></label><button onClick={()=>void importExport()} disabled={importing} aria-busy={importing}>{importing?<><span className="spinner" aria-hidden="true"/> Імпорт триває…</>:'Завантажити історію'}</button>{importing&&<p className="import-status" role="status" aria-live="polite"><span className="spinner" aria-hidden="true"/> Обробляємо історію чату. Не закривайте вікно; після завершення з’явиться результат імпорту.</p>}</div>
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>
       <AdminLogs catalog={catalog}/>

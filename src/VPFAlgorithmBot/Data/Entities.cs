@@ -150,6 +150,27 @@ public sealed class ChatInstructionOutbox
     public DateTimeOffset? SentAtUtc { get; set; }
     public string? LastError { get; set; }
 }
+public sealed class DailyDigestSchedule
+{
+    public int Id { get; set; }
+    public int ChatId { get; set; }
+    public string LocalTime { get; set; } = "16:00";
+    public string ObjectIdsCsv { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+}
+public sealed class DailyDigestDelivery
+{
+    public long Id { get; set; }
+    public int ScheduleId { get; set; }
+    public string LocalDate { get; set; } = "";
+    public int Part { get; set; }
+    public string Text { get; set; } = "";
+    public string Status { get; set; } = "pending";
+    public int Attempts { get; set; }
+    public DateTimeOffset DueAtUtc { get; set; }
+    public DateTimeOffset? SentAtUtc { get; set; }
+    public string? LastError { get; set; }
+}
 public sealed class AuditEvent
 {
     public long Id { get; set; }

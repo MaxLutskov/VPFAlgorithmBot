@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 
 export type Row = Record<string, unknown>
-export type Catalog = { chats:Row[],objects:Row[],categories:Row[],algorithms:Row[],routes:Row[],templates:Row[],templateVersions:Row[],answers:Row[],incidentLabels:Row[],users:Row[],scopes:Row[],settings:{key:string,value:string}[],reviews:Row[],outbox:Row[],audit:Row[] }
+export type Catalog = { chats:Row[],digests:{id:number,chatId:number,localTime:string,enabled:boolean,objectIds:number[],lastDelivery:{localDate:string,status:string,sentAtUtc:string|null,lastError:string|null}|null}[],objects:Row[],categories:Row[],algorithms:Row[],routes:Row[],templates:Row[],templateVersions:Row[],answers:Row[],incidentLabels:Row[],users:Row[],scopes:Row[],settings:{key:string,value:string}[],reviews:Row[],outbox:Row[],audit:Row[] }
 export const specs:Record<string,[string,string][]>= {
   chats:[['telegramChatId','number'],['senderTelegramId','number'],['name','text'],['enabled','bool']],
   objects:[['code','text'],['name','text'],['enabled','bool']],
