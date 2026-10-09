@@ -597,6 +597,11 @@ await using (var currentDb = new AlgorithmDbContext(new DbContextOptionsBuilder<
         await currentDb.UserScopes.CountAsync(x => x.UserId == user.Id) == 23 &&
         DailyDigestService.ObjectIds(currentDb.DailyDigestSchedules.Single().ObjectIdsCsv).Length == 20,
         "legacy RCHV responsibility and digest expand to the group while PNS viewing access is preserved");
+    var selectedActive = await DailyDigestService.ActiveObjectIdsAsync(currentDb,
+        [genericRchv.Id, pnsAlias.Id, -999, pnsAlias.Id]);
+    Check(selectedActive.SequenceEqual([pnsAlias.Id]) &&
+        (await DailyDigestService.ActiveObjectIdsAsync(currentDb, [genericRchv.Id])).Length == 0,
+        "digest selection drops retired object IDs and keeps selected active objects");
 }
 
 sealed class CapturingTelegramHandler : HttpMessageHandler

@@ -13,6 +13,13 @@ public static class DailyDigestService
     public static int[] ObjectIds(string csv) => csv.Split(',', StringSplitOptions.RemoveEmptyEntries)
         .Select(x => int.TryParse(x, out var id) ? id : 0).Where(x => x > 0).Distinct().ToArray();
 
+    public static async Task<int[]> ActiveObjectIdsAsync(AlgorithmDbContext db, IEnumerable<int>? requested, CancellationToken ct = default)
+    {
+        var ids = requested?.Where(x => x > 0).Distinct().ToArray() ?? [];
+        return ids.Length == 0 ? [] : await db.Objects.Where(x => x.Enabled && ids.Contains(x.Id))
+            .Select(x => x.Id).OrderBy(x => x).ToArrayAsync(ct);
+    }
+
     public static Task<int> AddInitialSchedulesAsync(AlgorithmDbContext db, CancellationToken ct = default) =>
         DatabaseWork.RunAsync(db, async () =>
         {

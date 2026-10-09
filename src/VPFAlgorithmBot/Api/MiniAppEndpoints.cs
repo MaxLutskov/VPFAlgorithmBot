@@ -264,8 +264,8 @@ public static class MiniAppEndpoints
             if (!await db.Chats.AnyAsync(x => x.Id == chatId && x.Enabled, ct)) return Results.BadRequest("Оберіть активний чат.");
             if (!TimeOnly.TryParseExact(data.LocalTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out _)) return Results.BadRequest("Вкажіть час у форматі ГГ:ХХ.");
-            var ids = data.ObjectIds?.Distinct().OrderBy(x => x).ToArray() ?? [];
-            if (ids.Length == 0 || await db.Objects.CountAsync(x => ids.Contains(x.Id) && x.Enabled, ct) != ids.Length)
+            var ids = await DailyDigestService.ActiveObjectIdsAsync(db, data.ObjectIds, ct);
+            if (ids.Length == 0)
                 return Results.BadRequest("Оберіть хоча б один активний об’єкт.");
             var schedule = await db.DailyDigestSchedules.SingleOrDefaultAsync(x => x.ChatId == chatId, ct);
             if (schedule is null)
