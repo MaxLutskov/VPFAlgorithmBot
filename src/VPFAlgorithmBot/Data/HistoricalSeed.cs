@@ -67,7 +67,9 @@ public static class HistoricalSeed
                     ruleCache.Add(description.MatchText, rule);
                 }
                 var chat = chats[item.Row.Source];
-                var obj = await db.Objects.SingleAsync(x => x.Code == description.ObjectCode, ct);
+                var obj = (await db.Objects.ToListAsync(ct))
+                    .Where(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode)
+                    .OrderByDescending(x => x.Enabled).ThenBy(x => x.Id).First();
                 var message = new IncomingMessage
                 {
                     ChatId = chat.Id, TelegramMessageId = -(item.Index + 1),

@@ -45,7 +45,9 @@ public sealed class IncidentService(AlgorithmDbContext db)
             occurred = EventParser.ParseTime(input.TelegramDateUtc, input.Text);
             rule = await AlgorithmCatalog.ResolveAsync(db, input.Text, ct);
             var description = EventParser.Describe(input.Text);
-            obj = await db.Objects.SingleAsync(x => x.Code == description.ObjectCode, ct);
+            obj = (await db.Objects.ToListAsync(ct))
+                .Where(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode)
+                .OrderByDescending(x => x.Enabled).ThenBy(x => x.Id).First();
         }
         catch (Exception ex) when (ex is FormatException or System.Text.RegularExpressions.RegexMatchTimeoutException or ArgumentException)
         {

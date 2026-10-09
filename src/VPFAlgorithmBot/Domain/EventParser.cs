@@ -19,7 +19,7 @@ public static partial class EventParser
     [GeneratedRegex(@"(?:🔴|🟢)\s*\d{1,2}:\d{2}:\d{2}\s+(?<object>[^:\r\n]{1,80}):\s*(?<name>.+)", RegexOptions.Singleline)]
     private static partial Regex DescriptionPattern();
 
-    public static string NormalizeObjectCode(string value) => Regex.Replace(value.Trim().ToUpperInvariant(), @"\s+", "");
+    public static string NormalizeObjectCode(string value) => Regex.Replace(value.Trim().ToUpperInvariant(), @"[\s\-–—]+", "");
 
     public static string NormalizeText(string value) => Regex.Replace(value, @"\s+", " ").Trim();
 

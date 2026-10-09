@@ -561,6 +561,44 @@ Check(await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 
     await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 11, 9, 14, 0, 0, TimeSpan.Zero)) == 2,
     "Kyiv winter time still sends at local 16:00");
 
+await using (var currentDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("current-objects-" + Guid.NewGuid()).Options))
+{
+    await currentDb.Database.EnsureCreatedAsync();
+    var genericRchv = new MonitoredObject { Code = "РЧВ", Name = "РЧВ" };
+    var genericPns = new MonitoredObject { Code = "ПНС", Name = "ПНС" };
+    var pnsAlias = new MonitoredObject { Code = "ПНС-1", Name = "Стара назва ПНС" };
+    currentDb.Objects.AddRange(genericRchv, genericPns, pnsAlias);
+    var category = new ProblemCategory { Name = "Без категорії" };
+    currentDb.Categories.Add(category);
+    var user = new AppUser { TelegramId = 123456, DisplayName = "Черговий", Status = "approved" };
+    currentDb.Users.Add(user);
+    var chat = new SourceChat { TelegramChatId = -123456, Name = "Алгоритми ВДВП" };
+    currentDb.Chats.Add(chat);
+    await currentDb.SaveChangesAsync();
+    var legacyRule = new AlgorithmRule { ObjectId = genericPns.Id, CategoryId = category.Id,
+        Name = "Тиск насоса низький", MatchPattern = "^Тиск насоса низький$" };
+    currentDb.AlgorithmRules.Add(legacyRule);
+    currentDb.RouteRules.Add(new RouteRule { UserId = user.Id, ObjectId = genericRchv.Id });
+    currentDb.UserScopes.Add(new UserScope { UserId = user.Id, ObjectId = genericPns.Id });
+    currentDb.DailyDigestSchedules.Add(new DailyDigestSchedule { ChatId = chat.Id, ObjectIdsCsv = genericRchv.Id.ToString() });
+    await currentDb.SaveChangesAsync();
+    Check(await CurrentObjectsSeed.ApplyAsync(currentDb) == 24 &&
+        await CurrentObjectsSeed.ApplyAsync(currentDb) == 0 &&
+        await currentDb.Objects.CountAsync(x => x.Enabled) == 25,
+        "current object list has exactly 20 RCHV, 3 PNS, VFS and NS without repeated seeding");
+    Check(!genericRchv.Enabled && !genericPns.Enabled && pnsAlias.Enabled && pnsAlias.Name == "ПНС-1" &&
+        AlgorithmCatalog.Family("РЧВ ІПС") == "РЧВ" && AlgorithmCatalog.Family("ПНС-1") == "ПНС",
+        "legacy group placeholders are hidden and spaced or hyphenated object codes share a family");
+    Check(legacyRule.ObjectId == pnsAlias.Id &&
+        (await AlgorithmCatalog.ResolveAsync(currentDb, "🔴 08:00:00 ПНС 1: Тиск насоса низький" )).Id == legacyRule.Id,
+        "existing PNS rule and alias are reused for incoming event spelling variants");
+    Check(await currentDb.RouteRules.CountAsync(x => x.UserId == user.Id && x.Enabled) == 20 &&
+        await currentDb.UserScopes.CountAsync(x => x.UserId == user.Id) == 23 &&
+        DailyDigestService.ObjectIds(currentDb.DailyDigestSchedules.Single().ObjectIdsCsv).Length == 20,
+        "legacy RCHV responsibility and digest expand to the group while PNS viewing access is preserved");
+}
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }

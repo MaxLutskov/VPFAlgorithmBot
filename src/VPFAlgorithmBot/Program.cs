@@ -76,6 +76,7 @@ await using (var scope = app.Services.CreateAsyncScope())
     {
         var report = await WaterWorkbookSeed.ApplyAsync(db);
         app.Logger.LogInformation("Water workbook catalog reconciliation: {Report}", report);
+        app.Logger.LogInformation("Added {Count} current monitored objects", await CurrentObjectsSeed.ApplyAsync(db));
         app.Logger.LogInformation("Created {Count} initial daily digest schedules", await DailyDigestService.AddInitialSchedulesAsync(db));
     }
 }

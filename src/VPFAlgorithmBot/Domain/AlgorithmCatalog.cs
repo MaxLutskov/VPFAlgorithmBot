@@ -9,6 +9,7 @@ public static class AlgorithmCatalog
     public static string Family(string code)
     {
         var normalized = EventParser.NormalizeObjectCode(code);
+        if (normalized == "РЧВІПС") return "РЧВ";
         var family = Regex.Replace(normalized, @"\d+$", "");
         return family.Length == 0 ? normalized : family;
     }
@@ -44,7 +45,8 @@ public static class AlgorithmCatalog
     {
         var description = EventParser.Describe(text);
         var objects = await db.Objects.AsNoTracking().ToListAsync(ct);
-        var obj = objects.FirstOrDefault(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode)
+        var obj = objects.Where(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode)
+            .OrderByDescending(x => x.Enabled).ThenBy(x => x.Id).FirstOrDefault()
             ?? throw new FormatException("Об’єкт ще не додано до довідника.");
         var familyIds = objects.Where(x => Family(x.Code) == Family(obj.Code)).Select(x => x.Id).ToHashSet();
         var rules = (await db.AlgorithmRules.AsNoTracking().ToListAsync(ct)).Where(x => familyIds.Contains(x.ObjectId)).ToList();
@@ -66,13 +68,15 @@ public static class AlgorithmCatalog
     {
         var description = EventParser.Describe(text);
         var objects = await db.Objects.ToListAsync(ct);
-        var obj = objects.SingleOrDefault(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode);
+        var obj = objects.Where(x => EventParser.NormalizeObjectCode(x.Code) == description.ObjectCode)
+            .OrderByDescending(x => x.Enabled).ThenBy(x => x.Id).FirstOrDefault();
         if (obj is { Enabled: false } && !includeDisabled) throw new FormatException("Об’єкт вимкнений адміністратором.");
         if (obj is null)
         {
             obj = new MonitoredObject { Code = description.ObjectCode, Name = description.ObjectName };
             db.Objects.Add(obj);
             await db.SaveChangesAsync(ct);
+            objects.Add(obj);
         }
         var relatedObjectIds = objects.Where(x => Family(x.Code) == Family(obj.Code)).Select(x => x.Id).ToArray();
         var rules = await db.AlgorithmRules.Where(x => relatedObjectIds.Contains(x.ObjectId)).ToListAsync(ct);
