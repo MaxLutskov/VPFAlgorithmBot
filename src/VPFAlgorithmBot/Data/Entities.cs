@@ -105,6 +105,8 @@ public sealed class Incident
     public int ObjectId { get; set; }
     public int CategoryId { get; set; }
     public int AlgorithmRuleId { get; set; }
+    // Snapshot from the opening message. Null identifies records awaiting legacy backfill.
+    public string? OperationalData { get; set; }
     public DateTimeOffset StartedAtUtc { get; set; }
     public DateTimeOffset? EndedAtUtc { get; set; }
     public long StartMessageId { get; set; }

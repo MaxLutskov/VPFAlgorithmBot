@@ -26,10 +26,14 @@ $resolved = Invoke-RestMethod -Uri "$base/demo/message" -Method Post -Headers $h
 if ($resolved.status -ne 'Resolved') { throw "Resolve failed: $($resolved | ConvertTo-Json)" }
 $before = Invoke-RestMethod -Uri "$base/incidents/$id" -Headers $headers
 if ($before.problemState -ne 'Resolved' -or $before.answerState -ne 'Unanswered') { throw 'Wrong state before response' }
+if ($before.operationalData -ne '(Зафіксовано концентрацію: 0.13 ppm)') { throw 'Opening operational data missing from detail API' }
+$incidentRows = Invoke-RestMethod -Uri "$base/incidents?period=all" -Headers $headers
+if (($incidentRows | Where-Object id -EQ $id).operationalData -ne $before.operationalData) { throw 'Operational data missing from list API' }
 $reply = @{incidentId=$id;telegramUserId=900002;templateId=1;text=''} | ConvertTo-Json
 $saved = Invoke-RestMethod -Uri "$base/demo/response" -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $reply
 $after = Invoke-RestMethod -Uri "$base/incidents/$id" -Headers $headers
 if ($after.problemState -ne 'Resolved' -or $after.answerState -ne 'Answered' -or $after.endedAtUtc -ne $before.endedAtUtc) { throw 'Wrong state after response' }
+if ($after.operationalData -ne $before.operationalData) { throw 'Answer changed opening operational data' }
 if ($after.responses.Count -ne 1 -or $after.responses[0].author -ne 'Оператор ВФС') { throw 'Response attribution failed' }
 $dashboard = Invoke-RestMethod -Uri "$base/dashboard" -Headers $headers
 if ($dashboard.PSObject.Properties.Name -contains 'answeredAfterResolution') { throw 'Removed dashboard metric is still present' }

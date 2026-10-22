@@ -72,6 +72,7 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
         model.Entity<DailyDigestDelivery>().Property(x => x.Text).HasMaxLength(3900);
         model.Entity<Setting>().HasKey(x => x.Key);
         model.Entity<Incident>().Ignore(x => x.ProblemState).Ignore(x => x.AnswerState);
+        model.Entity<Incident>().Property(x => x.OperationalData).HasMaxLength(4000);
         model.Entity<Incident>().HasMany(x => x.Responses).WithOne().HasForeignKey(x => x.IncidentId);
         model.Entity<AppUser>().HasMany(x => x.Scopes).WithOne().HasForeignKey(x => x.UserId);
         model.Entity<AppUser>().Property(x => x.DisplayName).HasMaxLength(200);

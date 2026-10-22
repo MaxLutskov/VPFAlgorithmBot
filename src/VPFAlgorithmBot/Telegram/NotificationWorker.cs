@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using VPFAlgorithmBot.Data;
+using VPFAlgorithmBot.Domain;
 
 namespace VPFAlgorithmBot.Telegram;
 
@@ -41,13 +42,13 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                             }
                             if (config["Telegram:Mode"] != "Demo" && item.Kind == "chat_prompt")
                             {
-                                var obj = await db.Objects.FindAsync([incident!.ObjectId], stoppingToken);
-                                var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], stoppingToken);
+                                var source = await db.IncomingMessages.FindAsync([incident!.StartMessageId], stoppingToken);
+                                if (source is null) throw new InvalidOperationException("Початкове повідомлення алгоритму не знайдено");
                                 var templates = await db.ResponseTemplates.AsNoTracking()
                                     .Where(x => x.Enabled && x.AlgorithmRuleId == incident.AlgorithmRuleId)
                                     .OrderBy(x => x.SortOrder).ThenBy(x => x.Id).Take(30).ToListAsync(stoppingToken);
-                                await telegram.SendAsync(chat.TelegramChatId,
-                                    $"🔴 {obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:",
+                                await telegram.SendReplyAsync(chat.TelegramChatId, source.TelegramMessageId,
+                                    "Надайте відповідь:",
                                     ResponseKeyboard.Build(incident.Id, templates), stoppingToken);
                             }
                             else if (config["Telegram:Mode"] != "Demo")
@@ -176,7 +177,7 @@ public sealed class NotificationWorker(IServiceScopeFactory scopeFactory, IConfi
                 db.NotificationOutbox.Add(new NotificationOutbox
                 {
                     IncidentId = incident.Id, UserId = userId, Kind = kind,
-                    Text = $"⏰ {obj?.Name} — {rule?.Name}: досі без відповіді. Відповідь можна надати і після завершення.",
+                    Text = $"⏰ {obj?.Name} — {rule?.Name}: досі без відповіді. Відповідь можна надати і після завершення.{EventParser.OperationalDataLine(incident.OperationalData)}",
                     DueAtUtc = now
                 });
             }

@@ -274,6 +274,10 @@ namespace VPFAlgorithmBot.Data.Migrations
                     b.Property<int>("ObjectId")
                         .HasColumnType("int");
 
+                    b.Property<string>("OperationalData")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
                     b.Property<string>("Quality")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");

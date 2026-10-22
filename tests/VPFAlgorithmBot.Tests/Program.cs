@@ -25,13 +25,21 @@ var first = new InboundEvent(-1001, 77, 101, started,
     "🔴 07:02:57 ВФС: Концентрація залишкового хлору менше 0,3 ppm на протязі 1 години. (Зафіксовано концентрацію: 0.13 ppm)");
 var created = await service.IngestAsync(first);
 Check(created.Status == "Created" && created.IncidentId is not null, "red message creates incident");
+Check((await db.Incidents.SingleAsync(x => x.Id == created.IncidentId)).OperationalData ==
+    "(Зафіксовано концентрацію: 0.13 ppm)", "opening observations are persisted separately from the algorithm type");
+Check(await db.NotificationOutbox.AnyAsync(x => x.IncidentId == created.IncidentId && x.Kind == "problem" &&
+    x.Text.Contains("(Зафіксовано концентрацію: 0.13 ppm)")), "private problem notification includes opening observations");
 Check((await service.IngestAsync(first)).Status == "Duplicate", "duplicate message ignored");
 var incidentId = created.IncidentId!.Value;
 var green = new InboundEvent(-1001, 77, 102, new DateTimeOffset(2026, 9, 28, 9, 8, 0, TimeSpan.FromHours(3)),
-    "🟢 09:07:57 ВФС: Концентрація залишкового хлору менше 0,3 ppm на протязі 1 години. Тривалість: 2h 5m 0s");
+    "🟢 09:07:57 ВФС: Концентрація залишкового хлору менше 0,3 ppm на протязі 1 години. (Зафіксовано концентрацію: 0.26 ppm) Тривалість: 2h 5m 0s");
 Check((await service.IngestAsync(green)).Status == "Resolved", "green message resolves incident");
 var before = await db.Incidents.Include(x => x.Responses).SingleAsync(x => x.Id == incidentId);
 Check(before.ProblemState == "Resolved" && before.AnswerState == "Unanswered", "resolved incident remains unanswered");
+Check(before.OperationalData == "(Зафіксовано концентрацію: 0.13 ppm)" &&
+    await db.NotificationOutbox.AnyAsync(x => x.IncidentId == incidentId && x.Kind == "recovery" &&
+        x.Text.Contains("0.13 ppm") && !x.Text.Contains("0.26 ppm")),
+    "recovery preserves and notifies the opening observations rather than recovery measurements");
 Check((before.EndedAtUtc!.Value - before.StartedAtUtc).TotalSeconds == 7500, "duration 2 hours 5 minutes");
 var originalEnd = before.EndedAtUtc;
 var saved = await service.RespondAsync(incidentId, 900002, "", 1, "test-answer-1");
@@ -326,6 +334,9 @@ await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new Telegra
 Check(recordingTelegram.Bodies.Any(x => System.Text.Json.JsonDocument.Parse(x).RootElement.GetRawText().Contains("custom:")) &&
     recordingTelegram.Bodies.All(x => !System.Text.Json.JsonDocument.Parse(x).RootElement.GetProperty("text").GetString()!.Contains($"Алгоритм №{answerId}")),
     "response choices include custom answer without a visible algorithm number");
+Check(recordingTelegram.Bodies.Any(x => System.Text.Json.JsonDocument.Parse(x).RootElement
+    .GetProperty("text").GetString()!.Contains("(Зафіксовано концентрацію: 0.13 ppm)")),
+    "Telegram answer choices include the stored opening observations");
 await answerUpdates.HandleAsync(new TelegramUpdate { CallbackQuery = new TelegramCallback
     { Id = "custom", From = new TelegramUser { Id = 900002 }, Data = $"custom:{answerId}" } }, CancellationToken.None);
 Check(await answerDb.PendingCustomAnswers.AnyAsync(x => x.IncidentId == answerId), "custom answer selection is persisted");
@@ -602,6 +613,88 @@ await using (var currentDb = new AlgorithmDbContext(new DbContextOptionsBuilder<
     Check(selectedActive.SequenceEqual([pnsAlias.Id]) &&
         (await DailyDigestService.ActiveObjectIdsAsync(currentDb, [genericRchv.Id])).Length == 0,
         "digest selection drops retired object IDs and keeps selected active objects");
+}
+
+var observationOptions = new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("observations-" + Guid.NewGuid()).Options;
+await using (var observationsDb = new AlgorithmDbContext(observationOptions))
+{
+    await DemoSeeder.SeedAsync(observationsDb);
+    var observationService = new IncidentService(observationsDb);
+    const string opening = "(Зафіксовано дозатор 10.9 л, ваги 8.4 л)";
+    var screenshot = new InboundEvent(-1001, 77, 60001,
+        new DateTimeOffset(2026, 10, 22, 11, 39, 0, TimeSpan.FromHours(3)),
+        $"🔴 11:38:58 РЧВ 7: Різниця витрати реагенту між вагами та дозатором більша 20%. {opening}");
+    var openedObservation = await observationService.IngestAsync(screenshot);
+    observationsDb.ChangeTracker.Clear();
+    var observation = await observationsDb.Incidents.SingleAsync(x => x.Id == openedObservation.IncidentId);
+    Check(observation.OperationalData == opening, "screenshot measurements survive reloading the incident");
+    const string pressureEvent = "🔴 11:44:07 ПНС-3: Вихідний тиск менше ніж задача 0,5 бар протягом 30 хв. (Тиск: 2.44 бар)";
+    Check(EventParser.OperationalData(pressureEvent) == "(Тиск: 2.44 бар)" &&
+        EventParser.Describe(pressureEvent).Name == EventParser.Describe(pressureEvent.Replace("2.44", "2.50")).Name &&
+        !EventParser.Describe(pressureEvent).Name.Contains("Тиск:"),
+        "named readings such as pressure are observations and do not split algorithm types");
+    var observedRule = await observationsDb.AlgorithmRules.FindAsync(observation.AlgorithmRuleId);
+    Check(!observedRule!.Name.Contains("Зафіксовано") &&
+        EventParser.OperationalData("🔴 11:38:58 РЧВ 7: Стан (хлорація включено)") == "" &&
+        EventParser.OperationalData("Стан (хлорація включено) (Було: 1 Стало: 2)\n(День туру: 3) Тривалість: 1h") ==
+            "(Було: 1 Стало: 2) (День туру: 3)",
+        "operational suffixes are extracted without stable name parentheses or duration");
+    await observationService.IngestAsync(screenshot with { MessageTelegramId = 60002,
+        Text = screenshot.Text.Replace("🔴 11:38:58", "🟢 11:39:00").Replace("10.9", "9.0") });
+    var reopenedObservation = await observationService.IngestAsync(screenshot with { MessageTelegramId = 60003,
+        TelegramDateUtc = screenshot.TelegramDateUtc.AddMinutes(1), Text = screenshot.Text.Replace("11:38:58", "11:39:58").Replace("10.9", "12.0") });
+    var nextObservation = await observationsDb.Incidents.SingleAsync(x => x.Id == reopenedObservation.IncidentId);
+    Check(observation.OperationalData == opening && nextObservation.OperationalData!.Contains("12.0") &&
+        observation.AlgorithmRuleId == nextObservation.AlgorithmRuleId,
+        "repeated occurrences share a type but retain independent immutable observations");
+
+    // Simulate records created before the column existed, including recovery-only history.
+    observation.OperationalData = null;
+    var observationRecoverySource = new IncomingMessage { ChatId = 1, TelegramMessageId = 60004,
+        Text = "🟢 11:39:00 РЧВ 7: Тест (Зафіксовано 99 л) Тривалість: 1h" };
+    observationsDb.IncomingMessages.Add(observationRecoverySource);
+    await observationsDb.SaveChangesAsync();
+    observationsDb.Incidents.Add(new Incident { ChatId = 1, ObjectId = observation.ObjectId,
+        AlgorithmRuleId = observation.AlgorithmRuleId, StartMessageId = observationRecoverySource.Id });
+    await observationsDb.SaveChangesAsync();
+    Check(await OperationalDataBackfill.ApplyAsync(observationsDb) > 0 && observation.OperationalData == opening &&
+        (await observationsDb.Incidents.SingleAsync(x => x.StartMessageId == observationRecoverySource.Id)).OperationalData == "" &&
+        nextObservation.OperationalData!.Contains("12.0") && await OperationalDataBackfill.ApplyAsync(observationsDb) == 0,
+        "backfill restores only opening data, preserves snapshots and never substitutes recovery-only values");
+
+    observationsDb.DailyDigestSchedules.Add(new DailyDigestSchedule { ChatId = 1, LocalTime = "16:00",
+        ObjectIdsCsv = observation.ObjectId.ToString() });
+    await observationsDb.SaveChangesAsync();
+    await DailyDigestService.QueueDueAsync(observationsDb,
+        new DateTimeOffset(2026, 10, 22, 16, 0, 0, TimeSpan.FromHours(3)));
+    Check((await observationsDb.DailyDigestDeliveries.SingleAsync()).Text.Contains(nextObservation.OperationalData!),
+        "daily digest includes per-occurrence opening observations");
+
+    var observationHandler = new RecordingTelegramHandler();
+    var observationClient = new TelegramClient(new HttpClient(observationHandler), telegramConfig);
+    using var observationServices = new ServiceCollection()
+        .AddScoped(_ => new AlgorithmDbContext(observationOptions))
+        .AddSingleton(observationClient).BuildServiceProvider();
+    using var observationWorker = new NotificationWorker(observationServices.GetRequiredService<IServiceScopeFactory>(),
+        welcomeConfig, NullLogger<NotificationWorker>.Instance);
+    await observationWorker.StartAsync(CancellationToken.None);
+    for (var i = 0; i < 60 && await observationsDb.NotificationOutbox.AnyAsync(x => x.Kind == "chat_prompt" && x.Status == "pending"); i++)
+        await Task.Delay(50);
+    await observationWorker.StopAsync(CancellationToken.None);
+    var groupPrompts = observationHandler.Bodies.Select(body =>
+        System.Text.Json.JsonDocument.Parse(body).RootElement)
+        .Where(payload => payload.GetProperty("chat_id").GetInt64() == -1001 &&
+            payload.TryGetProperty("reply_markup", out _)).ToList();
+    Check(groupPrompts.Count == 2 && groupPrompts.All(payload =>
+    {
+        var buttons = payload.GetProperty("reply_markup").GetProperty("inline_keyboard").ToString();
+        return payload.GetProperty("text").GetString() == "Надайте відповідь:" &&
+            !payload.GetProperty("reply_parameters").GetProperty("allow_sending_without_reply").GetBoolean() &&
+            buttons.Contains("template:") && buttons.Contains("custom:");
+    }) && groupPrompts.Select(payload => payload.GetProperty("reply_parameters").GetProperty("message_id").GetInt32())
+        .OrderBy(id => id).SequenceEqual(new[] { screenshot.MessageTelegramId, 60003 }),
+        "group prompts are short replies to each original occurrence with template and custom answer buttons");
 }
 
 sealed class CapturingTelegramHandler : HttpMessageHandler

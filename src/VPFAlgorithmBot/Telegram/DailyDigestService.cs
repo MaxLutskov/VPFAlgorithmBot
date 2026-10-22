@@ -69,9 +69,9 @@ public static class DailyDigestService
                     where ids.Contains(incident.ObjectId) && obj.Enabled && incident.EndedAtUtc == null &&
                         !db.Responses.Any(response => response.IncidentId == incident.Id)
                     orderby incident.StartedAtUtc, incident.Id
-                    select new { ObjectName = obj.Name, RuleName = rule.Name, incident.StartedAtUtc }).ToListAsync(ct);
+                    select new { ObjectName = obj.Name, RuleName = rule.Name, incident.StartedAtUtc, incident.OperationalData }).ToListAsync(ct);
                 var lines = incidents.Select((x, i) =>
-                    $"{i + 1}. {x.ObjectName} — {x.RuleName}\n   Початок: {TimeZoneInfo.ConvertTime(x.StartedAtUtc, Kyiv):dd.MM.yy HH:mm}").ToArray();
+                    $"{i + 1}. {x.ObjectName} — {x.RuleName}{EventParser.OperationalDataLine(x.OperationalData)}\n   Початок: {TimeZoneInfo.ConvertTime(x.StartedAtUtc, Kyiv):dd.MM.yy HH:mm}").ToArray();
                 var header = $"🔴 Активні алгоритми без відповіді — {local:dd.MM.yyyy}, {schedule.LocalTime} (Київ)\n";
                 var parts = Split(header, lines);
                 for (var part = 0; part < parts.Count; part++)

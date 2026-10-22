@@ -12,6 +12,7 @@ public static partial class EventParser
         public string MatchPattern => "^" + Regex.Escape(MatchText) + "$";
     }
     private static readonly TimeZoneInfo Kyiv = TimeZoneInfo.FindSystemTimeZoneById("Europe/Kyiv");
+    private const string OperationalDataStart = @"\((?:Зафіксовано|Було\s*:|День туру\s*:|[^()\r\n]{1,80}:)";
 
     [GeneratedRegex(@"(?<!\d)(?<h>\d{1,2}):(?<m>\d{2}):(?<s>\d{2})(?!\d)")]
     private static partial Regex TimePattern();
@@ -23,13 +24,24 @@ public static partial class EventParser
 
     public static string NormalizeText(string value) => Regex.Replace(value, @"\s+", " ").Trim();
 
+    // Keep observations separate from the shared rule name and its stable parentheses.
+    public static string OperationalData(string text)
+    {
+        var match = Regex.Match(text, OperationalDataStart + @".*?(?=\s*Тривалість\s*:|$)",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromMilliseconds(100));
+        return match.Success ? NormalizeText(match.Value) : "";
+    }
+
+    public static string OperationalDataLine(string? data) =>
+        string.IsNullOrWhiteSpace(data) ? "" : $"\nОпераційні дані: {data}";
+
     public static Description Describe(string text)
     {
         var match = DescriptionPattern().Match(text);
         if (!match.Success) throw new FormatException("Не вдалося визначити об’єкт і назву алгоритму.");
         var name = NormalizeText(match.Groups["name"].Value);
         // These suffixes contain changing measurements, not the rule's thresholds.
-        name = Regex.Split(name, @"\s*\((?:Зафіксовано|Було\s*:|День туру\s*:)|\s*Тривалість\s*:", RegexOptions.IgnoreCase)[0];
+        name = Regex.Split(name, @"\s*" + OperationalDataStart + @"|\s*Тривалість\s*:", RegexOptions.IgnoreCase)[0];
         name = Regex.Replace(name, @"\bна протязі\b", "протягом", RegexOptions.IgnoreCase).Trim().TrimEnd('.').Trim();
         var display = NormalizeText(match.Groups["object"].Value).ToUpperInvariant();
         var code = NormalizeObjectCode(display);

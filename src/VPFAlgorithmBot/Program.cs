@@ -72,6 +72,7 @@ await using (var scope = app.Services.CreateAsyncScope())
     }
     await SharedAlgorithmUpgrade.ApplyAsync(db);
     await LegacyArchiveCleanup.ApplyAsync(db);
+    await OperationalDataBackfill.ApplyAsync(db);
     if (mode != "Demo")
     {
         var report = await WaterWorkbookSeed.ApplyAsync(db);

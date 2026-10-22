@@ -196,7 +196,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
             await AnswerCallbackBestEffortAsync(callback.Id, "Оберіть відповідь", ct);
             await SendBestEffortAsync(callback.From.Id,
-                $"{obj?.Name} — {rule?.Name}\nОберіть готову відповідь або «Своя відповідь»:",
+                $"{obj?.Name} — {rule?.Name}{EventParser.OperationalDataLine(incident.OperationalData)}\nОберіть готову відповідь або «Своя відповідь»:",
                 ResponseKeyboard.Build(incidentId, templates), ct);
         }
         else if (parts[0] == "custom")
@@ -215,7 +215,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
                     var addressee = string.IsNullOrWhiteSpace(callback.From.Username)
                         ? callback.From.DisplayName : $"@{callback.From.Username}";
                     var sent = await telegram.SendAsync(groupChat.Id,
-                        $"{addressee}: {obj?.Name} — {rule?.Name}\nНапишіть свою відповідь саме у відповідь на це повідомлення:",
+                        $"{addressee}: {obj?.Name} — {rule?.Name}{EventParser.OperationalDataLine(incident.OperationalData)}\nНапишіть свою відповідь саме у відповідь на це повідомлення:",
                         new { force_reply = true, selective = true, input_field_placeholder = "Ваша відповідь" }, ct);
                     var promptId = sent.GetProperty("message_id").GetInt32();
                     var groupPending = await db.PendingCustomAnswers.FindAsync([user.Id], ct);
@@ -244,7 +244,7 @@ public sealed class BotUpdateService(AlgorithmDbContext db, IncidentService inci
             else { pending.IncidentId = incidentId; pending.ChatTelegramId = null; pending.PromptMessageTelegramId = null; pending.RequestedAtUtc = DateTimeOffset.UtcNow; }
             await db.SaveChangesAsync(ct);
             await AnswerCallbackBestEffortAsync(callback.Id, "Напишіть відповідь", ct);
-            await SendBestEffortAsync(callback.From.Id, $"{obj?.Name} — {rule?.Name}\nНапишіть свою відповідь звичайним повідомленням:",
+            await SendBestEffortAsync(callback.From.Id, $"{obj?.Name} — {rule?.Name}{EventParser.OperationalDataLine(incident.OperationalData)}\nНапишіть свою відповідь звичайним повідомленням:",
                 new { force_reply = true, input_field_placeholder = "Ваша відповідь" }, ct);
         }
         else if (parts[0] == "template" && parts.Length == 3 && int.TryParse(parts[2], out var templateId))

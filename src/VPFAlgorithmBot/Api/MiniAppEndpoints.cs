@@ -65,7 +65,7 @@ public static class MiniAppEndpoints
                 .Select(x => new
                 {
                     x.Id, x.ChatId, x.ObjectId, x.CategoryId, x.AlgorithmRuleId,
-                    x.StartedAtUtc, x.EndedAtUtc, x.Quality,
+                    x.StartedAtUtc, x.EndedAtUtc, x.Quality, x.OperationalData,
                     ProblemState = x.EndedAtUtc == null ? "Active" : "Resolved",
                     AnswerState = x.Responses.Any() ? "Answered" : "Unanswered",
                     FirstResponseAtUtc = x.Responses.Min(r => (DateTimeOffset?)r.CreatedAtUtc),
@@ -88,7 +88,7 @@ public static class MiniAppEndpoints
             return Results.Ok(new
             {
                 incident.Id, incident.ChatId, incident.ObjectId, incident.CategoryId, incident.AlgorithmRuleId,
-                incident.StartedAtUtc, incident.EndedAtUtc, incident.Quality,
+                incident.StartedAtUtc, incident.EndedAtUtc, incident.Quality, incident.OperationalData,
                 incident.ProblemState, incident.AnswerState,
                 Templates = templates,
                 Responses = incident.Responses.OrderBy(x => x.CreatedAtUtc).Select(x => new

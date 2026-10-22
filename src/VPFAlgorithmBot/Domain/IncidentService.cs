@@ -83,6 +83,7 @@ public sealed class IncidentService(AlgorithmDbContext db)
             {
                 ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
                 AlgorithmRuleId = rule.Id, StartedAtUtc = occurred, StartMessageId = message.Id,
+                OperationalData = EventParser.OperationalData(message.Text),
                 Quality = fromExport ? "export_missing_end" : "complete"
             };
             db.Incidents.Add(incident);
@@ -113,6 +114,7 @@ public sealed class IncidentService(AlgorithmDbContext db)
             {
                 ChatId = chat.Id, ObjectId = obj.Id, CategoryId = rule.CategoryId,
                 AlgorithmRuleId = rule.Id, StartedAtUtc = occurred - duration,
+                OperationalData = "", // A recovery-only import has no opening observations.
                 EndedAtUtc = occurred, StartMessageId = message.Id, EndMessageId = message.Id,
                 Quality = "export_inferred_start"
             };
@@ -163,8 +165,9 @@ public sealed class IncidentService(AlgorithmDbContext db)
             db.NotificationOutbox.Add(new NotificationOutbox
             {
                 IncidentId = incident.Id, UserId = userId, Kind = kind,
-                Text = kind == "problem" ? $"🔴 {obj?.Name} — {rule?.Name}. Надати відповідь можна також після завершення."
-                    : $"🟢 {obj?.Name} — {rule?.Name}: завершено. Якщо відповіді ще немає, її можна надати зараз.",
+                Text = (kind == "problem" ? $"🔴 {obj?.Name} — {rule?.Name}. Надати відповідь можна також після завершення."
+                    : $"🟢 {obj?.Name} — {rule?.Name}: завершено. Якщо відповіді ще немає, її можна надати зараз.")
+                    + EventParser.OperationalDataLine(incident.OperationalData),
                 DueAtUtc = DateTimeOffset.UtcNow
             });
         }
