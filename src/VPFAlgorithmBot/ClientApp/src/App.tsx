@@ -83,13 +83,14 @@ export default function App(){
   },[me?.role,tab])
 
   async function unlock(){try{const result=await api<{token:string}>('/admin/signin','POST',{password});adminToken=result.token;sessionStorage.setItem('vpfAdminToken',adminToken);const c=await api<Catalog>('/admin/catalog');setCatalog(c);setReminder(c.settings.find(x=>x.key==='reminder_minutes')?.value||'0');setNotice('Адміністративний доступ відкрито')}catch(e){setNotice(String(e))}}
-  async function saveDigest(chatId:number,localTime:string,objectIds:number[]){
-    await api(`/admin/digests/${chatId}`,'PUT',{localTime,objectIds})
+  async function saveDigest(scheduleId:number|null,chatId:number,localTime:string,objectIds:number[]){
+    await api(scheduleId===null?'/admin/digest-schedules':`/admin/digest-schedules/${scheduleId}`,
+      scheduleId===null?'POST':'PUT',{chatId,localTime,objectIds})
     setCatalog(await api<Catalog>('/admin/catalog'))
     setNotice('Щоденну розсилку збережено')
   }
-  async function disableDigest(chatId:number){
-    await api(`/admin/digests/${chatId}`,'DELETE')
+  async function disableDigest(scheduleId:number){
+    await api(`/admin/digest-schedules/${scheduleId}`,'DELETE')
     setCatalog(await api<Catalog>('/admin/catalog'))
     setNotice('Розсилку вимкнено')
   }

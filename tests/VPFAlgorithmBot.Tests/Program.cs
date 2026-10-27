@@ -571,6 +571,21 @@ Check(await DailyDigestService.QueueDueAsync(digestDb, digestAt.AddDays(1)) == 2
 Check(await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 11, 9, 13, 59, 0, TimeSpan.Zero)) == 0 &&
     await DailyDigestService.QueueDueAsync(digestDb, new DateTimeOffset(2026, 11, 9, 14, 0, 0, TimeSpan.Zero)) == 2,
     "Kyiv winter time still sends at local 16:00");
+var secondVdvSchedule = new DailyDigestSchedule { ChatId = digestChatVdv.Id,
+    LocalTime = "16:00", ObjectIdsCsv = digestRchv.Id.ToString() };
+digestDb.DailyDigestSchedules.Add(secondVdvSchedule);
+await digestDb.SaveChangesAsync();
+var sameTimeNextDay = new DateTimeOffset(2026, 11, 10, 14, 0, 0, TimeSpan.Zero);
+Check(await DailyDigestService.QueueDueAsync(digestDb, sameTimeNextDay) == 3 &&
+    await digestDb.DailyDigestDeliveries.CountAsync(x => x.LocalDate == "2026-11-10" &&
+        x.ScheduleId == secondVdvSchedule.Id) == 1 &&
+    await digestDb.DailyDigestSchedules.CountAsync(x => x.ChatId == digestChatVdv.Id && x.Enabled) == 2,
+    "two schedules for the same chat and time queue independently");
+secondVdvSchedule.Enabled = false;
+await digestDb.SaveChangesAsync();
+Check(await DailyDigestService.QueueDueAsync(digestDb, sameTimeNextDay.AddDays(1)) == 2 &&
+    digestDb.DailyDigestSchedules.Single(x => x.ChatId == digestChatVdv.Id && x.Id != secondVdvSchedule.Id).Enabled,
+    "disabling one schedule leaves the other schedule for that chat active");
 
 await using (var currentDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
     .UseInMemoryDatabase("current-objects-" + Guid.NewGuid()).Options))

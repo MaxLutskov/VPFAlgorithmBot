@@ -65,7 +65,7 @@ public sealed class AlgorithmDbContext(DbContextOptions<AlgorithmDbContext> opti
         model.Entity<IncidentResponse>().HasIndex(x => x.ActionKey).IsUnique().HasFilter("[ActionKey] IS NOT NULL");
         model.Entity<NotificationOutbox>().HasIndex(x => new { x.IncidentId, x.UserId, x.Kind }).IsUnique();
         model.Entity<ChatInstructionOutbox>().HasIndex(x => new { x.ChatId, x.Kind, x.EventMessageId }).IsUnique();
-        model.Entity<DailyDigestSchedule>().HasIndex(x => x.ChatId).IsUnique();
+        model.Entity<DailyDigestSchedule>().HasIndex(x => x.ChatId);
         model.Entity<DailyDigestSchedule>().Property(x => x.LocalTime).HasMaxLength(5);
         model.Entity<DailyDigestDelivery>().HasIndex(x => new { x.ScheduleId, x.LocalDate, x.Part }).IsUnique();
         model.Entity<DailyDigestDelivery>().Property(x => x.LocalDate).HasMaxLength(10);

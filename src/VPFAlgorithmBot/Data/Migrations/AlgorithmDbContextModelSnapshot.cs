@@ -242,8 +242,7 @@ namespace VPFAlgorithmBot.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ChatId")
-                        .IsUnique();
+                    b.HasIndex("ChatId");
 
                     b.ToTable("DailyDigestSchedules", "vpfalgo");
                 });

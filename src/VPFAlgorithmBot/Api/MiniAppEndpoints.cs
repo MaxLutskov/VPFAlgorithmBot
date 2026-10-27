@@ -128,7 +128,8 @@ public static class MiniAppEndpoints
             var canonical = AlgorithmCatalog.CanonicalIds(rules, objects);
             var canonicalIds = canonical.Values.Distinct().ToArray();
             var templates = await db.ResponseTemplates.AsNoTracking().ToListAsync(ct);
-            var digestSchedules = await db.DailyDigestSchedules.AsNoTracking().OrderBy(x => x.ChatId).ToListAsync(ct);
+            var digestSchedules = await db.DailyDigestSchedules.AsNoTracking()
+                .OrderBy(x => x.ChatId).ThenBy(x => x.LocalTime).ThenBy(x => x.Id).ToListAsync(ct);
             var digestDeliveries = await db.DailyDigestDeliveries.AsNoTracking().OrderByDescending(x => x.Id).ToListAsync(ct);
             var versions = await db.TemplateVersions.AsNoTracking().OrderByDescending(x => x.SavedAtUtc).Take(100).ToListAsync(ct);
             var recentAnswers = await (from answer in db.Responses.AsNoTracking()
@@ -257,33 +258,45 @@ public static class MiniAppEndpoints
             else setting.Value=data.Minutes.ToString();
             await db.SaveChangesAsync(ct);return Results.Ok();
         });
-        api.MapPut("/admin/digests/{chatId:int}", async (int chatId, DigestEdit data, HttpRequest req,
+        api.MapPost("/admin/digest-schedules", async (DigestEdit data, HttpRequest req,
             MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
-            if (!await db.Chats.AnyAsync(x => x.Id == chatId && x.Enabled, ct)) return Results.BadRequest("Оберіть активний чат.");
+            if (!await db.Chats.AnyAsync(x => x.Id == data.ChatId && x.Enabled, ct)) return Results.BadRequest("Оберіть активний чат.");
             if (!TimeOnly.TryParseExact(data.LocalTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out _)) return Results.BadRequest("Вкажіть час у форматі ГГ:ХХ.");
             var ids = await DailyDigestService.ActiveObjectIdsAsync(db, data.ObjectIds, ct);
             if (ids.Length == 0)
                 return Results.BadRequest("Оберіть хоча б один активний об’єкт.");
-            var schedule = await db.DailyDigestSchedules.SingleOrDefaultAsync(x => x.ChatId == chatId, ct);
-            if (schedule is null)
-            {
-                schedule = new DailyDigestSchedule { ChatId = chatId };
-                db.DailyDigestSchedules.Add(schedule);
-            }
+            var schedule = new DailyDigestSchedule { ChatId = data.ChatId, LocalTime = data.LocalTime,
+                ObjectIdsCsv = string.Join(',', ids) };
+            db.DailyDigestSchedules.Add(schedule);
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(new { schedule.Id });
+        });
+        api.MapPut("/admin/digest-schedules/{scheduleId:int}", async (int scheduleId, DigestEdit data, HttpRequest req,
+            MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            var schedule = await db.DailyDigestSchedules.FindAsync([scheduleId], ct);
+            if (schedule is null) return Results.NotFound();
+            if (!await db.Chats.AnyAsync(x => x.Id == data.ChatId && x.Enabled, ct)) return Results.BadRequest("Оберіть активний чат.");
+            if (!TimeOnly.TryParseExact(data.LocalTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out _)) return Results.BadRequest("Вкажіть час у форматі ГГ:ХХ.");
+            var ids = await DailyDigestService.ActiveObjectIdsAsync(db, data.ObjectIds, ct);
+            if (ids.Length == 0) return Results.BadRequest("Оберіть хоча б один активний об’єкт.");
+            schedule.ChatId = data.ChatId;
             schedule.LocalTime = data.LocalTime;
             schedule.ObjectIdsCsv = string.Join(',', ids);
             schedule.Enabled = true;
             await db.SaveChangesAsync(ct);
-            return Results.Ok();
+            return Results.Ok(new { schedule.Id });
         });
-        api.MapDelete("/admin/digests/{chatId:int}", async (int chatId, HttpRequest req,
+        api.MapDelete("/admin/digest-schedules/{scheduleId:int}", async (int scheduleId, HttpRequest req,
             MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
-            var schedule = await db.DailyDigestSchedules.SingleOrDefaultAsync(x => x.ChatId == chatId, ct);
+            var schedule = await db.DailyDigestSchedules.FindAsync([scheduleId], ct);
             if (schedule is null) return Results.NotFound();
             schedule.Enabled = false;
             await db.SaveChangesAsync(ct);
@@ -570,7 +583,7 @@ public static class MiniAppEndpoints
     private sealed record DemoResponse(long IncidentId, long TelegramUserId, int? TemplateId, string? Text);
     private sealed record ResponseEdit(int? TemplateId, string? Text, string? RequestId);
     private sealed record ReminderEdit(int Minutes);
-    private sealed record DigestEdit(string LocalTime, int[]? ObjectIds);
+    private sealed record DigestEdit(int ChatId, string LocalTime, int[]? ObjectIds);
     private sealed record ResponsibilityEdit(int[]? ObjectIds);
     private sealed record ScopeEdit(int[]? ObjectIds);
 }
