@@ -113,6 +113,13 @@ public static class MiniAppEndpoints
             catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
             catch (UnauthorizedAccessException) { return Results.StatusCode(403); }
         });
+        api.MapDelete("/admin/incidents/{id:long}", async (long id, HttpRequest req, MiniAppAuth auth,
+            AdminSession sessions, AlgorithmDbContext db, IncidentService incidents, CancellationToken ct) =>
+        {
+            if (!await IsAdmin(req, auth, sessions, db, ct)) return Results.StatusCode(403);
+            return await incidents.DeleteAsync(id, db.AuditActorUserId!.Value, ct)
+                ? Results.NoContent() : Results.NotFound();
+        });
         api.MapPost("/admin/signin", async (SignIn request, HttpRequest http, MiniAppAuth auth, AdminSession sessions, AlgorithmDbContext db, CancellationToken ct) =>
         {
             var user = await auth.GetUserAsync(http, db, ct);

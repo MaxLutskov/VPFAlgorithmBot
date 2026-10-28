@@ -32,6 +32,9 @@ export default function App(){
   const [answerText,setAnswerText]=useState('')
   const [responseBusy,setResponseBusy]=useState(false)
   const [responseNotice,setResponseNotice]=useState('')
+  const [confirmIncidentDelete,setConfirmIncidentDelete]=useState(false)
+  const [incidentDeleteBusy,setIncidentDeleteBusy]=useState(false)
+  const [incidentDeleteError,setIncidentDeleteError]=useState('')
   const responseRequestId=useRef<string|null>(null)
   const [filter,setFilter]=useState('active')
   const [selectedChatId,setSelectedChatId]=useState('')
@@ -197,12 +200,33 @@ export default function App(){
       setNotice('Відповідь збережено.')
     }catch(e){setResponseNotice(String(e))}finally{setResponseBusy(false)}
   }
+  async function deleteIncident(){
+    if(!detail||incidentDeleteBusy||!confirmIncidentDelete)return
+    setIncidentDeleteBusy(true)
+    setIncidentDeleteError('')
+    try{
+      await api(`/admin/incidents/${detail.id}`,'DELETE')
+      setDetail(null)
+      setConfirmIncidentDelete(false)
+      await load()
+      setNotice('Заявку та пов’язані відповіді видалено.')
+    }catch(e){setIncidentDeleteError(String(e))}finally{setIncidentDeleteBusy(false)}
+  }
   async function checkSources(){
     if(sourceStatusBusy)return
     setSourceStatusBusy(true)
     try{setSourceStatus(await api<SourceStatus>('/admin/source-status'))}
     catch(e){setNotice(String(e))}finally{setSourceStatusBusy(false)}
   }
+  const incidentDeleteControl=detail&&me?.role==='admin'&&adminToken?<div className="incident-delete">
+    {!confirmIncidentDelete?<button className="danger" disabled={responseBusy||incidentDeleteBusy} onClick={()=>{setIncidentDeleteError('');setConfirmIncidentDelete(true)}}>Видалити заявку</button>:
+      <div role="alertdialog" aria-label="Підтвердження видалення заявки">
+        <strong>Видалити цю заявку без можливості відновлення?</strong>
+        <p>Пов’язані відповіді та сповіщення також буде видалено. Повідомлення в Telegram залишаться.</p>
+        <div className="actions"><button className="danger" disabled={incidentDeleteBusy} onClick={()=>void deleteIncident()}>{incidentDeleteBusy?'Видаляємо…':'Так, видалити'}</button><button className="secondary" disabled={incidentDeleteBusy} onClick={()=>{setConfirmIncidentDelete(false);setIncidentDeleteError('')}}>Скасувати</button></div>
+      </div>}
+    {incidentDeleteError&&<p className="answer-notice" role="alert">{incidentDeleteError}</p>}
+  </div>:null
   return <div className="shell">
     <header><div><p className="eyebrow">VPF ALGORITHM BOT</p><h1>Виробничі алгоритми</h1><p>{me?.displayName || 'Завантаження облікового запису'}</p></div><button className="refresh" onClick={()=>void load()}>{busy?'Оновлення…':'Оновити'}</button></header>
     <nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>Дешборд</button><button className={tab==='history'?'selected':''} onClick={()=>{setFilter('all');setTab('history')}}>Історія</button>{me?.role==='admin'&&<button className={tab==='admin'?'selected':''} onClick={()=>setTab('admin')}>Адмінпанель{me.pendingAccessCount>0&&<span className="access-count" aria-label={`Запитів доступу: ${me.pendingAccessCount}`}>{me.pendingAccessCount}</span>}</button>}</nav>
@@ -211,7 +235,7 @@ export default function App(){
       <section className="period-bar"><label>Період<select value={period} onChange={e=>setPeriod(e.target.value)}><option value="today">Сьогодні</option><option value="yesterday">Вчора</option><option value="range">За датами</option><option value="all">За весь час</option></select></label>{period==='range'&&<><label>Від<input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)}/></label><label>До<input type="date" value={toDate} onChange={e=>setToDate(e.target.value)}/></label></>}<small>За датою початку алгоритму, час Києва</small></section>
       <section className="metrics"><div><strong>{stats.active??0}</strong><span>Активні</span></div><div><strong>{stats.unanswered??0}</strong><span>Без відповіді</span></div><div><strong>{stats.resolvedUnanswered??0}</strong><span>Завершені без відповіді</span></div></section>
       <section className="section-head"><h2>{tab==='dashboard'?'Активні алгоритми':'Історія алгоритмів'}</h2><div className="history-filters">{tab==='history'&&<select aria-label="Чат" value={selectedChatId} onChange={e=>setSelectedChatId(e.target.value)}><option value="">Усі чати</option>{lookups.chats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>}<select value={tab==='dashboard'?'active':filter} onChange={e=>setFilter(e.target.value)} disabled={tab==='dashboard'}><option value="active">Активні</option><option value="unanswered">Без відповіді</option><option value="all">Усі</option></select></div></section>
-      <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id));setSelectedTemplate('');setAnswerText('');setResponseNotice('');responseRequestId.current=null}catch(e){setNotice(String(e))}}}>
+      <div className="cards">{items.length===0?<p className="empty">Немає алгоритмів за обраним фільтром.</p>:items.map(i=><button className="card" key={i.id} onClick={async()=>{try{setDetail(await api<Detail>('/incidents/'+i.id));setSelectedTemplate('');setAnswerText('');setResponseNotice('');setConfirmIncidentDelete(false);setIncidentDeleteError('');responseRequestId.current=null}catch(e){setNotice(String(e))}}}>
         <div className="card-top"><div><b>{lookups.algorithms.find(x=>x.id===i.algorithmRuleId)?.name||'Алгоритм'}</b><small>{date(i.startedAtUtc)}</small></div><span className={i.problemState==='Active'?'badge active':'badge'}>{state(i.problemState)}</span></div>
         {i.operationalData&&<p className="operational-data"><b>Операційні дані:</b> {i.operationalData}</p>}<p>{lookups.objects.find(x=>x.id===i.objectId)?.name||'Об’єкт не визначено'} · {lookups.chats.find(x=>x.id===i.chatId)?.name||'Чат не визначено'}</p><small>Завершення: {date(i.endedAtUtc)}</small>{quality(i.quality)&&<small>{quality(i.quality)}</small>}<div className="card-bottom"><span className={i.answerState==='Unanswered'?'unanswered':''}>{state(i.answerState)}</span><span>Відповідей: {i.responseCount}</span></div>
       </button>)}</div>
@@ -231,6 +255,6 @@ export default function App(){
       <div className="panel"><h3>Нагадування</h3><p>Повторювати повідомлення відповідальним, доки немає відповіді, навіть після завершення алгоритму. 0 вимикає нагадування.</p><input type="number" min="0" max="1440" value={reminder} onChange={e=>setReminder(e.target.value)}/><button onClick={async()=>{try{await api('/admin/reminder','PUT',{minutes:Number(reminder)});setNotice('Інтервал збережено')}catch(e){setNotice(String(e))}}}>Зберегти хвилини</button></div>
       <AdminLogs catalog={catalog}/>
     </>}</section>}
-    {detail&&<div className="overlay" onClick={()=>{if(!responseBusy)setDetail(null)}}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" disabled={responseBusy} onClick={()=>setDetail(null)}>Закрити</button><h2>{lookups.algorithms.find(x=>x.id===detail.algorithmRuleId)?.name||'Алгоритм'}</h2><p>{date(detail.startedAtUtc)} · {lookups.objects.find(x=>x.id===detail.objectId)?.name||'Об’єкт не визначено'}</p>{detail.operationalData&&<p className="operational-data"><b>Операційні дані:</b> {detail.operationalData}</p>}<p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<div className="answer-form"><h3>Надати відповідь</h3><p>Відповідь можна додати і після завершення алгоритму.</p><label>Готова відповідь<select value={selectedTemplate} disabled={responseBusy} onChange={e=>{setSelectedTemplate(e.target.value);responseRequestId.current=null}}><option value="">Оберіть шаблон (необов’язково)</option>{detail.templates.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></label>{selectedTemplate&&<p className="template-preview">{detail.templates.find(t=>String(t.id)===selectedTemplate)?.text}</p>}<label>Власна відповідь або уточнення<textarea value={answerText} maxLength={2000} disabled={responseBusy} onChange={e=>{setAnswerText(e.target.value);responseRequestId.current=null}} placeholder="Опишіть виконані дії"/></label><button className="save-response" disabled={responseBusy||(!selectedTemplate&&!answerText.trim())} onClick={()=>void submitResponse()}>{responseBusy?<><span className="spinner" aria-hidden="true"/> Зберігаємо…</>:'Зберегти відповідь'}</button>{responseNotice&&<p className="answer-notice" role="status">{responseNotice}</p>}</div><h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
+    {detail&&<div className="overlay" onClick={()=>{if(!responseBusy&&!incidentDeleteBusy)setDetail(null)}}><article className="drawer" onClick={e=>e.stopPropagation()}><button className="close" disabled={responseBusy||incidentDeleteBusy} onClick={()=>setDetail(null)}>Закрити</button><h2>{lookups.algorithms.find(x=>x.id===detail.algorithmRuleId)?.name||'Алгоритм'}</h2><p>{date(detail.startedAtUtc)} · {lookups.objects.find(x=>x.id===detail.objectId)?.name||'Об’єкт не визначено'}</p>{detail.operationalData&&<p className="operational-data"><b>Операційні дані:</b> {detail.operationalData}</p>}<p>{state(detail.problemState)} · {state(detail.answerState)}</p><p>Завершення: {date(detail.endedAtUtc)}</p>{quality(detail.quality)&&<p className="notice">{quality(detail.quality)}</p>}<div className="answer-form"><h3>Надати відповідь</h3><p>Відповідь можна додати і після завершення алгоритму.</p><label>Готова відповідь<select value={selectedTemplate} disabled={responseBusy} onChange={e=>{setSelectedTemplate(e.target.value);responseRequestId.current=null}}><option value="">Оберіть шаблон (необов’язково)</option>{detail.templates.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></label>{selectedTemplate&&<p className="template-preview">{detail.templates.find(t=>String(t.id)===selectedTemplate)?.text}</p>}<label>Власна відповідь або уточнення<textarea value={answerText} maxLength={2000} disabled={responseBusy} onChange={e=>{setAnswerText(e.target.value);responseRequestId.current=null}} placeholder="Опишіть виконані дії"/></label><button className="save-response" disabled={responseBusy||(!selectedTemplate&&!answerText.trim())} onClick={()=>void submitResponse()}>{responseBusy?<><span className="spinner" aria-hidden="true"/> Зберігаємо…</>:'Зберегти відповідь'}</button>{responseNotice&&<p className="answer-notice" role="status">{responseNotice}</p>}</div>{incidentDeleteControl}<h3>Відповіді</h3>{detail.responses.length===0?<p>Відповідей ще немає.</p>:detail.responses.map(r=><div className="response" key={r.id}><b>{r.author}</b><small>{date(r.createdAtUtc)}</small><p>{r.text}</p></div>)}</article></div>}
   </div>
 }

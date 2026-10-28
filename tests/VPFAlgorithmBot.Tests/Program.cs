@@ -712,6 +712,59 @@ await using (var observationsDb = new AlgorithmDbContext(observationOptions))
         "group prompts are short replies to each original occurrence with template and custom answer buttons");
 }
 
+await using (var deleteDb = new AlgorithmDbContext(new DbContextOptionsBuilder<AlgorithmDbContext>()
+    .UseInMemoryDatabase("selective-delete-" + Guid.NewGuid()).Options))
+{
+    await DemoSeeder.SeedAsync(deleteDb);
+    var deleteChat = await deleteDb.Chats.SingleAsync();
+    var deleteObject = await deleteDb.Objects.FirstAsync();
+    var deleteRule = await deleteDb.AlgorithmRules.FirstAsync();
+    var deleteCategory = await deleteDb.Categories.FirstAsync();
+    var deleteAdmin = await deleteDb.Users.SingleAsync(x => x.Role == "admin");
+    var at = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+    var target = new Incident { ChatId = deleteChat.Id, ObjectId = deleteObject.Id,
+        AlgorithmRuleId = deleteRule.Id, CategoryId = deleteCategory.Id, StartedAtUtc = at,
+        StartMessageId = 5001, EndMessageId = 5002, EndedAtUtc = at.AddMinutes(10) };
+    var retained = new Incident { ChatId = deleteChat.Id, ObjectId = deleteObject.Id,
+        AlgorithmRuleId = deleteRule.Id, CategoryId = deleteCategory.Id, StartedAtUtc = at.AddHours(1),
+        StartMessageId = 5003 };
+    deleteDb.Incidents.AddRange(target, retained);
+    await deleteDb.SaveChangesAsync();
+    deleteDb.Responses.AddRange(
+        new IncidentResponse { IncidentId = target.Id, UserId = deleteAdmin.Id, Text = "Target", CreatedAtUtc = at },
+        new IncidentResponse { IncidentId = retained.Id, UserId = deleteAdmin.Id, Text = "Keep", CreatedAtUtc = at });
+    deleteDb.NotificationOutbox.AddRange(
+        new NotificationOutbox { IncidentId = target.Id, UserId = deleteAdmin.Id, DueAtUtc = at },
+        new NotificationOutbox { IncidentId = retained.Id, UserId = deleteAdmin.Id, DueAtUtc = at });
+    deleteDb.PendingCustomAnswers.Add(new PendingCustomAnswer { IncidentId = target.Id,
+        UserId = deleteAdmin.Id, RequestedAtUtc = at });
+    deleteDb.IncomingMessages.AddRange(
+        new IncomingMessage { Id = 5001, ChatId = deleteChat.Id, TelegramMessageId = 5001, SenderTelegramId = 77,
+            TelegramDateUtc = at, ReceivedAtUtc = at, IncidentId = target.Id },
+        new IncomingMessage { Id = 5002, ChatId = deleteChat.Id, TelegramMessageId = 5002, SenderTelegramId = 77,
+            TelegramDateUtc = at, ReceivedAtUtc = at, IncidentId = target.Id },
+        new IncomingMessage { Id = 5003, ChatId = deleteChat.Id, TelegramMessageId = 5003, SenderTelegramId = 77,
+            TelegramDateUtc = at, ReceivedAtUtc = at, IncidentId = retained.Id });
+    await deleteDb.SaveChangesAsync();
+    var deleteService = new IncidentService(deleteDb);
+    Check(await deleteService.DeleteAsync(target.Id, deleteAdmin.Id), "admin can delete one incident");
+    Check(!await deleteDb.Incidents.AnyAsync(x => x.Id == target.Id) &&
+        await deleteDb.Incidents.AnyAsync(x => x.Id == retained.Id), "selective delete preserves other incidents");
+    Check(!await deleteDb.Responses.AnyAsync(x => x.IncidentId == target.Id) &&
+        !await deleteDb.NotificationOutbox.AnyAsync(x => x.IncidentId == target.Id) &&
+        !await deleteDb.PendingCustomAnswers.AnyAsync(x => x.IncidentId == target.Id) &&
+        await deleteDb.Responses.AnyAsync(x => x.IncidentId == retained.Id) &&
+        await deleteDb.NotificationOutbox.AnyAsync(x => x.IncidentId == retained.Id),
+        "selective delete removes dependent answers and notifications only");
+    Check(await deleteDb.IncomingMessages.CountAsync(x => x.IncidentId == null) == 2 &&
+        await deleteDb.IncomingMessages.CountAsync(x => x.IncidentId == retained.Id) == 1,
+        "source messages remain for import deduplication and are detached");
+    Check(await deleteDb.AuditEvents.CountAsync(x => x.Action == "delete-incident" &&
+        x.EntityId == target.Id && x.ActorUserId == deleteAdmin.Id) == 1 &&
+        !await deleteService.DeleteAsync(target.Id, deleteAdmin.Id),
+        "one readable audit entry is kept and repeated delete returns not found");
+}
+
 sealed class CapturingTelegramHandler : HttpMessageHandler
 {
     public string? Body { get; private set; }

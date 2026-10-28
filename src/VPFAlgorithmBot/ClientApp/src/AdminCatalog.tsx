@@ -135,6 +135,7 @@ const roles:Record<string,string>={admin:'Адміністратор',operator:'
 const statuses:Record<string,string>={pending:'Очікує підтвердження',approved:'Підтверджено',denied:'Відхилено',blocked:'Заблоковано'}
 const deliveryStatuses:Record<string,string>={pending:'Очікує надсилання',sent:'Надіслано',failed:'Помилка доставки',cancelled:'Скасовано'}
 const auditActions:Record<string,string>={Added:'Додано',Modified:'Змінено',Deleted:'Видалено',respond:'Надано відповідь на',
+  'delete-incident':'Видалено',
   'import-telegram-export':'Імпортовано історію чату','import-history':'Імпортовано історичні дані',
   'consolidate-algorithms':'Об’єднано типи алгоритмів','remove-legacy-archive':'Прибрано старий архів'}
 const auditEntities:Record<string,string>={AppUser:'користувача',UserScope:'право перегляду',SourceChat:'чат',
@@ -142,7 +143,7 @@ const auditEntities:Record<string,string>={AppUser:'користувача',User
   ResponseTemplate:'шаблон відповіді',TemplateVersion:'версію шаблону',Incident:'алгоритм',incident:'алгоритм',
   IncidentResponse:'відповідь',NotificationOutbox:'сповіщення',Setting:'налаштування',IncomingMessage:'повідомлення'}
 const auditFields:Record<string,string>={Name:'Назва',Code:'Код',DisplayName:'Ім’я працівника',Username:'Telegram-нік',
-  UserId:'Працівник',ObjectId:'Об’єкт',ChatId:'Чат',AlgorithmRuleId:'Алгоритм',Title:'Назва відповіді',Text:'Текст',
+  UserId:'Працівник',ObjectId:'Об’єкт',ChatId:'Чат',AlgorithmRuleId:'Алгоритм',AlgorithmName:'Алгоритм',ObjectName:'Об’єкт',StartedAtUtc:'Початок',Title:'Назва відповіді',Text:'Текст',
   Enabled:'Увімкнено',Status:'Стан доступу',Role:'Роль',TelegramChatId:'Telegram ID чату',
   SenderTelegramId:'Telegram ID відправника',TemplateId:'Шаблон',Version:'Версія',SortOrder:'Порядок показу',
   Key:'Налаштування',Value:'Значення',Eligible:'Повідомлень за 3 дні',imported:'Імпортовано',duplicates:'Пропущено повторних',review:'Потребують перевірки'}
@@ -173,7 +174,8 @@ export function AdminLogs({catalog}: {catalog:Catalog}){
   }
   const auditTarget=(item:Row,fields:Record<string,string>)=>{
     const entity=String(item.entity)
-    if(entity.toLowerCase()==='incident')return incidentLabel(item.entityId)
+    if(entity.toLowerCase()==='incident')return fields.AlgorithmName&&fields.ObjectName
+      ?`${fields.AlgorithmName} · ${fields.ObjectName}`:incidentLabel(item.entityId)
     if(entity==='RouteRule'||entity==='UserScope')return [name(catalog.users,fields.UserId,'displayName'),name(catalog.objects,fields.ObjectId)].filter(x=>x&&x!=='Невідомий запис').join(' · ')
     if(entity==='TemplateVersion'||entity==='ResponseTemplate')return fields.Title||name(catalog.templates,item.entityId,'title')
     if(entity==='AppUser')return fields.DisplayName||name(catalog.users,item.entityId,'displayName')
@@ -193,6 +195,7 @@ export function AdminLogs({catalog}: {catalog:Catalog}){
     if(key==='Status')return statuses[value]||value
     if(key==='Role')return roles[value]||value
     if(key==='Key'&&value==='reminder_minutes')return 'Інтервал нагадувань'
+    if(key==='StartedAtUtc')return when(value)
     return value
   }
   return <div className="admin-logs">

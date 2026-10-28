@@ -8,6 +8,38 @@ public sealed record IngestResult(string Status, long? IncidentId = null, string
 
 public sealed class IncidentService(AlgorithmDbContext db)
 {
+    public Task<bool> DeleteAsync(long incidentId, int adminUserId, CancellationToken ct = default) =>
+        DatabaseWork.RunAsync(db, async () =>
+        {
+            var incident = await db.Incidents.FindAsync([incidentId], ct);
+            if (incident is null) return false;
+
+            var obj = await db.Objects.FindAsync([incident.ObjectId], ct);
+            var rule = await db.AlgorithmRules.FindAsync([incident.AlgorithmRuleId], ct);
+            db.PendingCustomAnswers.RemoveRange(await db.PendingCustomAnswers
+                .Where(x => x.IncidentId == incidentId).ToListAsync(ct));
+            db.NotificationOutbox.RemoveRange(await db.NotificationOutbox
+                .Where(x => x.IncidentId == incidentId).ToListAsync(ct));
+            db.Responses.RemoveRange(await db.Responses
+                .Where(x => x.IncidentId == incidentId).ToListAsync(ct));
+            var sourceMessages = await db.IncomingMessages
+                .Where(x => x.IncidentId == incidentId || x.Id == incident.StartMessageId || x.Id == incident.EndMessageId)
+                .ToListAsync(ct);
+            foreach (var message in sourceMessages) message.IncidentId = null;
+            db.Incidents.Remove(incident);
+
+            // Record one readable action instead of an audit row for every removed notification.
+            db.AuditActorUserId = null;
+            db.AuditEvents.Add(new AuditEvent
+            {
+                ActorUserId = adminUserId, Action = "delete-incident", Entity = "incident", EntityId = incidentId,
+                Detail = $"AlgorithmName={rule?.Name ?? "Невідомий алгоритм"}, ObjectName={obj?.Name ?? "Невідомий об’єкт"}, StartedAtUtc={incident.StartedAtUtc:O}",
+                CreatedAtUtc = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync(ct);
+            return true;
+        }, ct);
+
     public Task<IngestResult> IngestAsync(InboundEvent input, CancellationToken ct = default) =>
         DatabaseWork.RunAsync(db, () => IngestCoreAsync(input, false, ct), ct);
 
